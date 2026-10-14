@@ -1,0 +1,17 @@
+# Copy to pood.toml. Secrets come from env: DASHSCOPE_API_KEY (and optionally DASHSCOPE_REALTIME_URL).
+hostname = "127.0.0.1"   # keep loopback: tailscale serve is the only way in
+port = 8790
+dbPath = "pood.db"
+maxUtteranceSeconds = 120
+
+[auth]
+# Tailscale logins allowed via `tailscale serve` (see `tailscale status` / admin console)
+allowedUsers = ["you@github"]
+# Optional bearer tokens for clients not behind tailscale serve (e.g. local testing)
+tokens = []
+
+[qwen]
+# Workspace endpoint from Model Studio, or the generic intl one
+realtimeUrl = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
+model = "qwen3.8-omni-flash-realtime"
+# instructions = "..."   # override the default transcription prompt

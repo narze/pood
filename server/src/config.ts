@@ -21,7 +21,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const file: any = existsSync(path) ? Bun.TOML.parse(readFileSync(path, "utf8")) : {};
   const config: Config = {
     hostname: file.hostname ?? "127.0.0.1",
-    port: Number(env.PORT ?? file.port ?? 8787),
+    port: Number(env.PORT ?? file.port ?? 8790),
     dbPath: file.dbPath ?? "pood.db",
     maxUtteranceSeconds: file.maxUtteranceSeconds ?? 120,
     auth: { allowedUsers: file.auth?.allowedUsers ?? [], tokens: file.auth?.tokens ?? [] },

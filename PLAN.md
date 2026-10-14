@@ -46,7 +46,7 @@ server over Tailscale, and the gateway transcribes it with Qwen3.5-Omni Realtime
 Android (Pood)                                          Linux home server
 ┌────────────────────────────┐   tailnet / wss    ┌──────────────────────────────┐        ┌──────────────────────┐
 │ bubble → small window      │ ─── PCM16 16k ───► │ tailscale serve :443         │        │ DashScope realtime   │
-│ mic foreground service     │ ◄── partial/final ─│  └ pood-server (Bun) :8787   │ ─wss─► │ qwen3.5-omni-*-      │
+│ mic foreground service     │ ◄── partial/final ─│  └ pood-server (Bun) :8790   │ ─wss─► │ qwen3.5-omni-*-      │
 │ clipboard, history screen  │ ◄── GET history ── │     ├ AsrProvider: qwen-omni │        │ realtime (SG region) │
 └────────────────────────────┘                    │     └ SQLite: transcripts    │        └──────────────────────┘
                                                   └──────────────────────────────┘
@@ -112,7 +112,7 @@ PCM16LE, 16 kHz, mono, 100 ms each (3200 B).
   both the Omni text and the ASR text lets us compare their quality later.
 - **Deploy:**
   - `bun build --compile` produces a single binary.
-  - A `systemd` unit runs it, and `tailscale serve --bg 8787` exposes it.
+  - A `systemd` unit runs it, and `tailscale serve --bg 8790` exposes it.
   - Document this in `server/README.md`.
 - **Dev tool:** `bun run mic <file.wav>` streams a WAV through the protocol and prints the partial and final text.
 
