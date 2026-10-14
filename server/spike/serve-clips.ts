@@ -110,6 +110,13 @@ Bun.serve({
     const edit = path.match(/^\/clips\/([\w-]+)$/);
     if (edit && req.method === "PUT") return editClip(req, edit[1]);
     if (path === "/record") return html("Record clip", RECORD_PAGE);
+    if (path === "/pood.apk") {
+      const apk = Bun.file(`${import.meta.dir}/../../android/app/build/outputs/apk/debug/app-debug.apk`);
+      if (!(await apk.exists())) return new Response("APK not built yet", { status: 404 });
+      return new Response(apk, {
+        headers: { "content-type": "application/vnd.android.package-archive", "content-disposition": 'attachment; filename="pood-debug.apk"' },
+      });
+    }
     const refs = readRefs();
     const m = path.match(/^\/([\w-]+)\.wav$/);
     if (m && refs.some(([id]) => id === m[1]))
@@ -118,7 +125,7 @@ Bun.serve({
     const rows = refs
       .map(([id, voice, text]) => `<li><b>${esc(id)}</b> <small>(${esc(voice)})</small><form class="ref" data-id="${esc(id)}"><textarea name="text" rows="2">${esc(text ?? "")}</textarea><button>Save text</button> <small></small></form><audio controls preload="none" src="/${esc(id)}.wav"></audio></li>`)
       .join("");
-    return html("Pood clips", `<h1>Pood spike clips</h1><p><a href="/record">● Record a new clip</a></p><p>16 kHz mono PCM16, exactly what is sent to the model.</p><ul>${rows}</ul>${EDIT_SCRIPT}`);
+    return html("Pood clips", `<h1>Pood spike clips</h1><p><a href="/pood.apk">⬇ Download Pood debug APK</a></p><p><a href="/record">● Record a new clip</a></p><p>16 kHz mono PCM16, exactly what is sent to the model.</p><ul>${rows}</ul>${EDIT_SCRIPT}`);
   },
 });
 console.log(`clips on http://127.0.0.1:${port}`);
