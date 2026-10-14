@@ -8,7 +8,9 @@
     "test": "bun test",
     "typecheck": "tsc --noEmit",
     "build": "bun build src/main.ts --compile --outfile dist/pood-server",
-    "client": "bun scripts/client.ts"
+    "client": "bun scripts/client.ts",
+    "build:linux-x64": "bun build src/main.ts --compile --target=bun-linux-x64 --outfile dist/linux-x64/pood-server && cp deploy/* pood.example.toml dist/linux-x64/",
+    "build:linux-arm64": "bun build src/main.ts --compile --target=bun-linux-arm64 --outfile dist/linux-arm64/pood-server && cp deploy/* pood.example.toml dist/linux-arm64/"
   },
   "devDependencies": {
     "@types/bun": "latest",

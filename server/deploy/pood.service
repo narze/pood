@@ -1,0 +1,21 @@
+[Unit]
+Description=Pood speech-to-text gateway
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/pood-server
+Environment=POOD_CONFIG=/etc/pood/pood.toml
+EnvironmentFile=/etc/pood/env
+DynamicUser=yes
+StateDirectory=pood
+WorkingDirectory=/var/lib/pood
+Restart=on-failure
+RestartSec=2
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
