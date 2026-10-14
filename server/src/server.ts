@@ -1,17 +1,21 @@
 import type { ServerWebSocket } from "bun";
+import { BYTES_PER_MS, VOICE_DBFS, dbfs } from "./audio";
 import { authenticate } from "./auth";
 import { cleanTranscript } from "./cleanup";
 import type { Config } from "./config";
 import type { History } from "./history";
 import type { AsrProvider, AsrSession } from "./provider";
 
-const BYTES_PER_MS = 32; // 16 kHz × 16-bit mono
-const MIN_AUDIO_BYTES = 100 * BYTES_PER_MS;
+/** Less voiced audio than this is treated as "nothing said" and never sent to the model. */
+const MIN_VOICED_MS = 300;
 
 interface Utterance {
   id: string;
   session: AsrSession;
   bytes: number;
+  voicedMs: number;
+  /** Raw audio, kept only when POOD_DUMP_AUDIO is set (debugging). */
+  dump?: Buffer[];
   stoppedAt?: number;
 }
 
@@ -36,7 +40,7 @@ export function createServer({ config, provider, history, log = () => {} }: Deps
 
   function start(ws: Socket, id: string) {
     if (ws.data.utterance) return send(ws, { type: "error", utteranceId: id, code: "busy", message: "an utterance is already active" });
-    const utterance: Utterance = { id, session: provider.open(), bytes: 0 };
+    const utterance: Utterance = { id, session: provider.open(), bytes: 0, voicedMs: 0, dump: process.env.POOD_DUMP_AUDIO ? [] : undefined };
     ws.data.utterance = utterance;
     utterance.session.onPartial = (text, stash) => send(ws, { type: "partial", utteranceId: id, text, stash });
     utterance.session.result.then(
@@ -64,8 +68,9 @@ export function createServer({ config, provider, history, log = () => {} }: Deps
   function stop(ws: Socket, utterance: Utterance) {
     if (utterance.stoppedAt !== undefined) return;
     utterance.stoppedAt = performance.now();
-    if (utterance.bytes < MIN_AUDIO_BYTES) {
-      // Too short to transcribe: answer immediately without asking the provider.
+    if (utterance.dump) Bun.write(`${process.env.POOD_DUMP_AUDIO}/${Date.now()}-${utterance.id}.pcm`, Buffer.concat(utterance.dump));
+    if (utterance.voicedMs < MIN_VOICED_MS) {
+      // No speech: answer immediately without asking the provider, which would hallucinate.
       ws.data.utterance = undefined;
       utterance.session.cancel();
       send(ws, { type: "final", utteranceId: utterance.id, id: null, text: "", durationMs: Math.round(utterance.bytes / BYTES_PER_MS), latencyMs: 0 });
@@ -86,6 +91,8 @@ export function createServer({ config, provider, history, log = () => {} }: Deps
     if (!utterance || utterance.stoppedAt !== undefined) return; // late frames after stop are dropped
     if (pcm.length % 2) return send(ws, { type: "error", utteranceId: utterance.id, code: "bad_request", message: "audio frame is not whole PCM16 samples" });
     utterance.bytes += pcm.length;
+    if (dbfs(pcm) > VOICE_DBFS) utterance.voicedMs += pcm.length / BYTES_PER_MS;
+    utterance.dump?.push(Buffer.from(pcm));
     utterance.session.pushAudio(pcm);
     if (utterance.bytes >= maxBytes) {
       send(ws, { type: "error", utteranceId: utterance.id, code: "too_long", message: `stopped after ${config.maxUtteranceSeconds}s` });

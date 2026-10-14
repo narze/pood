@@ -84,7 +84,13 @@ async function connect(url: string) {
   return { ws, next, json, inbox };
 }
 
-const audio = (ms: number) => new Uint8Array(ms * 32);
+/** A loud 440 Hz tone (counts as speech for the silence gate). */
+const audio = (ms: number) => {
+  const samples = new Int16Array(ms * 16);
+  for (let i = 0; i < samples.length; i++) samples[i] = Math.round(8000 * Math.sin((2 * Math.PI * 440 * i) / 16000));
+  return new Uint8Array(samples.buffer);
+};
+const silence = (ms: number) => new Uint8Array(ms * 32);
 
 test("rejects unauthenticated requests, accepts Tailscale header or token", async () => {
   const { base } = setup();
@@ -102,13 +108,13 @@ test("streams an utterance: partials, cleaned final, saved to history", async ()
   expect(await c.next("ready")).toMatchObject({ user: "me@github", model: "fake-model" });
 
   c.json({ type: "start", utteranceId: "u1" });
-  c.ws.send(audio(100));
-  c.ws.send(audio(100));
-  expect(await c.next("partial")).toEqual({ type: "partial", utteranceId: "u1", text: "", stash: "heard 3200" });
+  c.ws.send(audio(200));
+  c.ws.send(audio(200));
+  expect(await c.next("partial")).toEqual({ type: "partial", utteranceId: "u1", text: "", stash: "heard 6400" });
   c.json({ type: "stop", utteranceId: "u1" });
 
   const final = await c.next("final");
-  expect(final).toMatchObject({ utteranceId: "u1", text: "สวัสดี hello", durationMs: 200 });
+  expect(final).toMatchObject({ utteranceId: "u1", text: "สวัสดี hello", durationMs: 400 });
   expect(final.id).toBeNumber();
 
   const res = await fetch(`${base}/v1/history`, { headers: { "Tailscale-User-Login": "me@github" } });
@@ -118,11 +124,12 @@ test("streams an utterance: partials, cleaned final, saved to history", async ()
   expect(del.status).toBe(204);
 });
 
-test("too-short audio returns an empty final without calling the provider's stop", async () => {
+test("silence returns an empty final without asking the provider", async () => {
   const { history, ws: url } = setup();
   const c = await connect(url);
   c.json({ type: "start", utteranceId: "u1" });
-  c.ws.send(audio(50));
+  c.ws.send(silence(2000));
+  c.ws.send(audio(200)); // a short blip isn't speech either
   c.json({ type: "stop", utteranceId: "u1" });
   expect(await c.next("final")).toMatchObject({ id: null, text: "" });
   expect(sessions[0]!.cancelled).toBe(true);
@@ -137,7 +144,7 @@ test("rejects a second start while busy, and allows a new one afterwards", async
   expect(await c.next("error")).toMatchObject({ utteranceId: "u2", code: "busy" });
   c.json({ type: "cancel", utteranceId: "u1" });
   c.json({ type: "start", utteranceId: "u3" });
-  c.ws.send(audio(200));
+  c.ws.send(audio(400));
   c.json({ type: "stop", utteranceId: "u3" });
   expect(await c.next("final")).toMatchObject({ utteranceId: "u3", text: "สวัสดี hello" });
   expect(sessions[0]!.cancelled).toBe(true);
@@ -148,21 +155,21 @@ test("upstream failure is reported as an error and nothing is saved", async () =
   const { history, ws: url } = setup();
   const c = await connect(url);
   c.json({ type: "start", utteranceId: "u1" });
-  c.ws.send(audio(200));
+  c.ws.send(audio(400));
   c.json({ type: "stop", utteranceId: "u1" });
   expect(await c.next("error")).toMatchObject({ utteranceId: "u1", code: "upstream", message: "boom" });
   expect(history.list("me@github")).toEqual([]);
 });
 
 test("auto-stops at the length limit", async () => {
-  const { ws: url } = setup(0.2);
+  const { ws: url } = setup(0.4);
   const c = await connect(url);
   c.json({ type: "start", utteranceId: "u1" });
-  c.ws.send(audio(100));
-  c.ws.send(audio(100));
-  c.ws.send(audio(100)); // dropped: already stopped
+  c.ws.send(audio(200));
+  c.ws.send(audio(200));
+  c.ws.send(audio(200)); // dropped: already stopped
   expect(await c.next("error")).toMatchObject({ code: "too_long" });
-  expect(await c.next("final")).toMatchObject({ text: "สวัสดี hello", durationMs: 200 });
+  expect(await c.next("final")).toMatchObject({ text: "สวัสดี hello", durationMs: 400 });
 });
 
 test("closing the socket cancels the active utterance", async () => {

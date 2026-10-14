@@ -41,6 +41,14 @@ server over Tailscale, and the gateway transcribes it with Qwen3.5-Omni Realtime
     190–300 ms for 3.5 flash. **Decision: default to 3.8 flash**; latency is still well under 1 s. The model name is
     in config.
 
+- **Hallucination on silence** (found while testing on the emulator, which sends digital silence):
+  - Given silence or quiet noise, Qwen-Omni writes a fluent, invented Thai or English sentence **every time**.
+  - Adding "output nothing if there's no speech" to the prompt didn't help.
+  - Real speech surrounded by long pauses is transcribed correctly.
+  - **The gateway therefore has a silence gate:** an utterance with under 300 ms of audio above -50 dBFS never reaches
+    the model.
+  - Remaining risk: louder background noise with no speech can still get past the gate.
+
 ## Architecture
 ```
 Android (Pood)                                          Linux home server

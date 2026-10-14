@@ -63,7 +63,7 @@ A connection carries at most one utterance at a time:
 Notes:
 - **Partials** are a live preview from a fast ASR pass and may differ from `final`. Render `text` normally and `stash`
   dimmed.
-- **Short or silent recordings.** If there was under 100 ms of audio, or the transcript comes back empty, the server
+- **Short or silent recordings.** If there was under 300 ms of audio louder than -50 dBFS, or the transcript comes back empty, the server
   sends a `final` with `id: null` and `text: ""` and saves nothing.
 - **Length limit.** An utterance longer than `maxUtteranceSeconds` is stopped automatically. The server sends
   `error` with code `too_long`, then a `final` for the audio up to that point.

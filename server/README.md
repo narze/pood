@@ -13,7 +13,12 @@ bun run dev                                     # http://127.0.0.1:8790
 bun test                                        # unit tests (fake provider)
 LIVE=1 bun test                                 # also hits DashScope
 bun scripts/client.ts some.pcm ws://127.0.0.1:8790/v1/ws <token>   # stream a 16 kHz PCM16 clip
+POOD_DUMP_AUDIO=/tmp/pood-dump bun run dev     # also save each utterance's raw audio (debugging)
 ```
+
+**Silence gate.** If an utterance has less than 300 ms of audio louder than -50 dBFS, it never reaches the model, and
+the client gets an empty `final`. This matters because Qwen-Omni makes up fluent sentences when it gets silence or
+noise, and changing the prompt doesn't stop it.
 
 ## Deploy (Linux home server)
 
