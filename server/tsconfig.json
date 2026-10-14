@@ -10,5 +10,5 @@
     "skipLibCheck": true,
     "noUncheckedIndexedAccess": true
   },
-  "include": ["src", "test", "scripts", "spike"]
+  "include": ["src", "test", "scripts"]
 }
