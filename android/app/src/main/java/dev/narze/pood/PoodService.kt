@@ -230,6 +230,8 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
         if (expanded) {
             val onRight = settings.bubbleX < 0 || settings.bubbleX + bubblePx / 2 > metrics.widthPixels / 2
             params.x = if (onRight) metrics.widthPixels - panelPx - margin else margin
+            val panelHeightPx = (PANEL_MAX_HEIGHT_DP * metrics.density).toInt()
+            params.y = settings.bubbleY.coerceAtMost(metrics.heightPixels - panelHeightPx).coerceAtLeast(margin)
         } else {
             params.x = if (settings.bubbleX < 0) metrics.widthPixels - bubblePx else settings.bubbleX
             params.y = settings.bubbleY
@@ -287,6 +289,7 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
     companion object {
         const val BUBBLE_DP = 56
         const val PANEL_DP = 300
+        private const val PANEL_MAX_HEIGHT_DP = 440
         private const val CHANNEL = "bubble"
         private const val NOTIFICATION_ID = 1
         private const val ACTION_QUIT = "dev.narze.pood.QUIT"
