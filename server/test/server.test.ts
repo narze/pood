@@ -181,3 +181,63 @@ test("closing the socket cancels the active utterance", async () => {
   await Bun.sleep(50);
   expect(sessions[0]!.cancelled).toBe(true);
 });
+
+/** Opens a desktop socket for `user`; collects transcripts. */
+async function desktop(base: string, name: string, headers: Record<string, string> = { "Tailscale-User-Login": "me@github" }) {
+  const ws = new WebSocket(`${base.replace("http", "ws")}/v1/desktop?name=${name}`, { headers } as any);
+  const got: any[] = [];
+  const hello = new Promise<any>((resolve) => {
+    ws.onmessage = (ev) => {
+      const msg = JSON.parse(String(ev.data));
+      if (msg.type === "hello") resolve(msg);
+      else got.push(msg);
+    };
+  });
+  cleanup.push(() => ws.close());
+  return { ws, got, hello: await hello };
+}
+
+test("broadcasts finals to every desktop of the same user only", async () => {
+  const { base, ws: url } = setup();
+  const mac = await desktop(base, "MacBook");
+  const pc = await desktop(base, "Desktop-PC");
+  const other = await desktop(base, "Theirs", { Authorization: "Bearer secret" }); // a different user
+  expect(mac.hello).toEqual({ type: "hello", user: "me@github" });
+  expect(other.hello.user).not.toBe("me@github");
+
+  const c = await connect(url);
+  c.json({ type: "start", utteranceId: "u1" });
+  c.ws.send(audio(400));
+  c.json({ type: "stop", utteranceId: "u1" });
+  const final = await c.next("final");
+  expect(final.delivered.sort()).toEqual(["Desktop-PC", "MacBook"]);
+
+  await Bun.sleep(50);
+  const expected = { type: "transcript", id: final.id, text: "สวัสดี hello", device: "test", createdAt: expect.any(Number) };
+  expect(mac.got).toEqual([expected]);
+  expect(pc.got).toEqual([expected]);
+  expect(other.got).toEqual([]);
+});
+
+test("silent finals are not broadcast; closed desktops are forgotten", async () => {
+  const { base, ws: url } = setup();
+  const mac = await desktop(base, "MacBook");
+  const c = await connect(url);
+  c.json({ type: "start", utteranceId: "u1" });
+  c.ws.send(silence(500));
+  c.json({ type: "stop", utteranceId: "u1" });
+  expect(await c.next("final")).toMatchObject({ text: "", delivered: [] });
+
+  mac.ws.close();
+  await Bun.sleep(50);
+  c.json({ type: "start", utteranceId: "u2" });
+  c.ws.send(audio(400));
+  c.json({ type: "stop", utteranceId: "u2" });
+  expect(await c.next("final")).toMatchObject({ text: "สวัสดี hello", delivered: [] });
+  expect(mac.got).toEqual([]);
+});
+
+test("desktop channel requires auth", async () => {
+  const { base } = setup();
+  expect((await fetch(`${base}/v1/desktop`)).status).toBe(401);
+});

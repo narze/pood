@@ -3,7 +3,7 @@ import { BYTES_PER_MS, VOICE_DBFS, dbfs } from "./audio";
 import { authenticate } from "./auth";
 import { cleanTranscript } from "./cleanup";
 import type { Config } from "./config";
-import type { History } from "./history";
+import type { History, Transcript } from "./history";
 import type { AsrProvider, AsrSession } from "./provider";
 
 /** Less voiced audio than this is treated as "nothing said" and never sent to the model. */
@@ -20,6 +20,8 @@ interface Utterance {
 }
 
 interface Conn {
+  /** `phone` streams audio on /v1/ws; `desktop` only receives transcripts on /v1/desktop. */
+  role: "phone" | "desktop";
   user: string;
   device: string;
   utterance?: Utterance;
@@ -37,6 +39,14 @@ export interface Deps {
 export function createServer({ config, provider, history, log = () => {} }: Deps) {
   const send = (ws: Socket, msg: object) => ws.send(JSON.stringify(msg));
   const maxBytes = config.maxUtteranceSeconds * 1000 * BYTES_PER_MS;
+  const desktops = new Map<string, Set<Socket>>(); // user → connected desktops
+
+  /** Sends a transcript to every connected desktop of its user; returns their names. */
+  function broadcast(user: string, t: Transcript): string[] {
+    const targets = [...(desktops.get(user) ?? [])];
+    for (const d of targets) send(d, { type: "transcript", id: t.id, text: t.text, device: t.device, createdAt: t.createdAt });
+    return targets.map((d) => d.data.device);
+  }
 
   function start(ws: Socket, id: string) {
     if (ws.data.utterance) return send(ws, { type: "error", utteranceId: id, code: "busy", message: "an utterance is already active" });
@@ -53,8 +63,9 @@ export function createServer({ config, provider, history, log = () => {} }: Deps
         const saved = text
           ? history.add({ user: ws.data.user, device: ws.data.device, text, asrText: result.asrText ?? "", model: provider.model, durationMs, latencyMs })
           : null;
-        log(`final ${ws.data.user} ${durationMs}ms audio, ${latencyMs}ms latency`);
-        send(ws, { type: "final", utteranceId: id, id: saved?.id ?? null, text, durationMs, latencyMs });
+        const delivered = saved ? broadcast(ws.data.user, saved) : [];
+        log(`final ${ws.data.user} ${durationMs}ms audio, ${latencyMs}ms latency, delivered to ${delivered.length}`);
+        send(ws, { type: "final", utteranceId: id, id: saved?.id ?? null, text, durationMs, latencyMs, delivered });
       },
       (err: Error) => {
         if (ws.data.utterance !== utterance) return;
@@ -73,7 +84,7 @@ export function createServer({ config, provider, history, log = () => {} }: Deps
       // No speech: answer immediately without asking the provider, which would hallucinate.
       ws.data.utterance = undefined;
       utterance.session.cancel();
-      send(ws, { type: "final", utteranceId: utterance.id, id: null, text: "", durationMs: Math.round(utterance.bytes / BYTES_PER_MS), latencyMs: 0 });
+      send(ws, { type: "final", utteranceId: utterance.id, id: null, text: "", durationMs: Math.round(utterance.bytes / BYTES_PER_MS), latencyMs: 0, delivered: [] });
       return;
     }
     utterance.session.stop();
@@ -135,9 +146,10 @@ export function createServer({ config, provider, history, log = () => {} }: Deps
       const user = authenticate(req, config.auth);
       if (!user) return new Response("unauthorized", { status: 401 });
 
-      if (url.pathname === "/v1/ws") {
-        const device = (url.searchParams.get("device") ?? "unknown").slice(0, 64);
-        return server.upgrade(req, { data: { user, device } }) ? undefined : new Response("expected websocket", { status: 400 });
+      if (url.pathname === "/v1/ws" || url.pathname === "/v1/desktop") {
+        const role = url.pathname === "/v1/ws" ? "phone" : "desktop";
+        const device = (url.searchParams.get("device") ?? url.searchParams.get("name") ?? "unknown").slice(0, 64);
+        return server.upgrade(req, { data: { role, user, device } }) ? undefined : new Response("expected websocket", { status: 400 });
       }
       if (url.pathname === "/v1/me" && req.method === "GET") return Response.json({ user, model: provider.model });
       if (url.pathname === "/v1/history" && req.method === "GET") {
@@ -152,15 +164,30 @@ export function createServer({ config, provider, history, log = () => {} }: Deps
       return new Response("not found", { status: 404 });
     },
     websocket: {
+      idleTimeout: 60, // Bun pings idle sockets, so dead desktops are noticed and dropped
       open(ws) {
-        log(`connect ${ws.data.user} (${ws.data.device})`);
+        log(`connect ${ws.data.role} ${ws.data.user} (${ws.data.device})`);
+        if (ws.data.role === "desktop") {
+          let set = desktops.get(ws.data.user);
+          if (!set) desktops.set(ws.data.user, (set = new Set()));
+          set.add(ws);
+          send(ws, { type: "hello", user: ws.data.user });
+          return;
+        }
         send(ws, { type: "ready", user: ws.data.user, model: provider.model });
       },
       message(ws, msg) {
+        if (ws.data.role === "desktop") return; // desktops only listen
         if (typeof msg === "string") onControl(ws, msg);
         else onAudio(ws, msg);
       },
       close(ws) {
+        if (ws.data.role === "desktop") {
+          const set = desktops.get(ws.data.user);
+          set?.delete(ws);
+          if (set?.size === 0) desktops.delete(ws.data.user);
+          return log(`disconnect desktop ${ws.data.user} (${ws.data.device})`);
+        }
         cancel(ws);
       },
     },
