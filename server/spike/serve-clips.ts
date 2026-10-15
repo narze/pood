@@ -117,6 +117,13 @@ Bun.serve({
         headers: { "content-type": "application/vnd.android.package-archive", "content-disposition": 'attachment; filename="pood-debug.apk"' },
       });
     }
+    if (path === "/pood-mac.zip") {
+      const zip = Bun.file(`${import.meta.dir}/../../desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Pood-mac.zip`);
+      if (!(await zip.exists())) return new Response("Mac app not packaged yet", { status: 404 });
+      return new Response(zip, {
+        headers: { "content-type": "application/zip", "content-disposition": 'attachment; filename="Pood-mac.zip"' },
+      });
+    }
     const refs = readRefs();
     const m = path.match(/^\/([\w-]+)\.wav$/);
     if (m && refs.some(([id]) => id === m[1]))
@@ -125,7 +132,7 @@ Bun.serve({
     const rows = refs
       .map(([id, voice, text]) => `<li><b>${esc(id)}</b> <small>(${esc(voice)})</small><form class="ref" data-id="${esc(id)}"><textarea name="text" rows="2">${esc(text ?? "")}</textarea><button>Save text</button> <small></small></form><audio controls preload="none" src="/${esc(id)}.wav"></audio></li>`)
       .join("");
-    return html("Pood clips", `<h1>Pood spike clips</h1><p><a href="/pood.apk">⬇ Download Pood debug APK</a></p><p><a href="/record">● Record a new clip</a></p><p>16 kHz mono PCM16, exactly what is sent to the model.</p><ul>${rows}</ul>${EDIT_SCRIPT}`);
+    return html("Pood clips", `<h1>Pood spike clips</h1><p><a href="/pood.apk">⬇ Download Pood debug APK</a></p><p><a href="/pood-mac.zip">⬇ Download Pood for Mac</a></p><p><a href="/record">● Record a new clip</a></p><p>16 kHz mono PCM16, exactly what is sent to the model.</p><ul>${rows}</ul>${EDIT_SCRIPT}`);
   },
 });
 console.log(`clips on http://127.0.0.1:${port}`);
