@@ -36,6 +36,6 @@ menu bar (**Open config.json…**), then choose **Reconnect**:
 
 | Icon | State |
 |---|---|
-| Solid mic | Connected |
-| Outline mic | Connecting |
-| Struck-through mic | Disconnected; the menu shows why |
+| Solid person speaking | Connected |
+| Outline person speaking | Connecting |
+| Struck-through person speaking | Disconnected; the menu shows why |
