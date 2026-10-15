@@ -277,7 +277,7 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
             this, 2, Intent(this, PoodService::class.java).setAction(ACTION_TOGGLE), PendingIntent.FLAG_IMMUTABLE,
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_mic)
+            .setSmallIcon(R.drawable.ic_speaking)
             .setContentTitle("Pood is ready")
             .setContentText("Tap the bubble to speak")
             .setContentIntent(open)

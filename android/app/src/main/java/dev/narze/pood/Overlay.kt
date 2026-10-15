@@ -75,7 +75,7 @@ private fun Bubble(s: UiState, onExpand: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         if (s.phase == Phase.Transcribing) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
-        else Icon(painterResource(R.drawable.ic_mic), contentDescription = "Pood", tint = Color.White)
+        else Icon(painterResource(R.drawable.ic_speaking), contentDescription = "Pood", tint = Color.White)
         ConnDot(s.conn, Modifier.align(Alignment.TopEnd))
     }
 }
