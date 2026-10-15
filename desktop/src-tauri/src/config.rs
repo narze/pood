@@ -1,6 +1,17 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, path::Path};
 
+/// What to do with a transcript that arrives while this machine is receiving.
+#[derive(Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq, Debug)]
+#[serde(rename_all = "lowercase")]
+pub enum Mode {
+    /// Put every transcript on the clipboard.
+    #[default]
+    Copy,
+    /// Copy, and also paste the fresh ones into the focused app.
+    Paste,
+}
+
 /// `config.json` in the app config dir. Edited by hand until the settings window lands (#6).
 #[derive(Serialize, Deserialize, Clone, Default)]
 pub struct Config {
@@ -10,6 +21,9 @@ pub struct Config {
     /// Shown on the phone as "→ <name> ✓". Defaults to the hostname.
     #[serde(default)]
     pub name: String,
+    /// `"copy"` (default) or `"paste"`; also switchable from the menu.
+    #[serde(default)]
+    pub mode: Mode,
     /// Only needed when not going through `tailscale serve`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -31,6 +45,17 @@ impl Config {
             config.name = default_name();
         }
         Ok(config)
+    }
+
+    pub fn save(&self, path: &Path) -> Result<(), String> {
+        fs::write(path, serde_json::to_string_pretty(self).unwrap()).map_err(|e| e.to_string())
+    }
+
+    /// Persists a new mode, keeping the rest of the file as it is on disk.
+    pub fn set_mode(path: &Path, mode: Mode) -> Result<(), String> {
+        let mut config = Config::load(path)?;
+        config.mode = mode;
+        config.save(path)
     }
 
     /// `https://host:8790` → `wss://host:8790/v1/desktop?name=…`
@@ -70,7 +95,7 @@ mod tests {
     use super::*;
 
     fn with_url(url: &str) -> Config {
-        Config { url: url.into(), name: "Mac Book".into(), token: None }
+        Config { url: url.into(), name: "Mac Book".into(), mode: Mode::Copy, token: None }
     }
 
     #[test]
@@ -79,5 +104,16 @@ mod tests {
         assert_eq!(with_url("http://127.0.0.1:8790").socket_url().unwrap(), "ws://127.0.0.1:8790/v1/desktop?name=Mac%20Book");
         assert!(with_url("").socket_url().is_err());
         assert!(with_url("h.ts.net").socket_url().is_err());
+    }
+
+    #[test]
+    fn mode_defaults_to_copy_and_persists() {
+        assert_eq!(serde_json::from_str::<Config>("{}").unwrap().mode, Mode::Copy);
+        let path = std::env::temp_dir().join(format!("pood-config-test-{}.json", std::process::id()));
+        let _ = fs::remove_file(&path);
+        Config::set_mode(&path, Mode::Paste).unwrap();
+        assert_eq!(Config::load(&path).unwrap().mode, Mode::Paste);
+        assert!(fs::read_to_string(&path).unwrap().contains("\"mode\": \"paste\""));
+        let _ = fs::remove_file(&path);
     }
 }

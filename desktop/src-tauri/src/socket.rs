@@ -19,7 +19,13 @@ pub enum Conn {
 #[serde(tag = "type", rename_all = "lowercase")]
 enum ServerMsg {
     Hello { user: String },
-    Transcript { text: String, device: String },
+    Transcript {
+        text: String,
+        device: String,
+        /// Absent from older gateways, which means "not fresh": copy only.
+        #[serde(default)]
+        fresh: bool,
+    },
     #[serde(other)]
     Unknown,
 }
@@ -34,7 +40,7 @@ pub async fn run(
     load_config: impl Fn() -> Result<Config, String>,
     reconnect: Arc<Notify>,
     on_state: impl Fn(Conn),
-    on_transcript: impl Fn(String, String),
+    on_transcript: impl Fn(String, String, bool),
 ) {
     let mut backoff = Duration::from_secs(1);
     loop {
@@ -55,7 +61,7 @@ async fn connect_once(
     load_config: &impl Fn() -> Result<Config, String>,
     reconnect: &Notify,
     on_state: &impl Fn(Conn),
-    on_transcript: &impl Fn(String, String),
+    on_transcript: &impl Fn(String, String, bool),
 ) -> Result<(), String> {
     let config = load_config()?;
     let mut request = config.socket_url()?.into_client_request().map_err(|e| e.to_string())?;
@@ -77,7 +83,7 @@ async fn connect_once(
                     connected = true;
                     on_state(Conn::Connected { user });
                 }
-                Ok(ServerMsg::Transcript { text, device }) => on_transcript(text, device),
+                Ok(ServerMsg::Transcript { text, device, fresh }) => on_transcript(text, device, fresh),
                 Ok(ServerMsg::Unknown) | Err(_) => {}
             },
             Some(Ok(_)) => {} // pings are answered by tungstenite
