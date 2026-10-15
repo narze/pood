@@ -10,10 +10,11 @@ server over Tailscale, and the gateway transcribes it with Qwen3.5-Omni Realtime
 |---|---|
 | Speech | Thai and English mixed (code-switching). Language is always `auto`. |
 | Model | API only: DashScope `qwen3.8-omni-flash-realtime` (chosen in M0). Any `qwen3.x-omni-*-realtime` can be set in config. There is no local model. |
-| Gateway host | Linux home server on the tailnet: `systemd` + `tailscale serve`. |
+| Gateway host | Linux home server on the tailnet: `systemd` + `tailscale serve`. For now it runs on the Mac. |
 | Bubble UX | Tapping the bubble opens a small window. That window has a **tap-to-toggle record button**, the transcript, and the other controls. |
 | History | Transcripts are kept on the gateway in SQLite and viewable in the app. Audio is not stored. |
-| Deferred | Desktop push and local/other ASR providers. The provider interface exists so they can be added later. |
+| Desktop push | Every final transcript is **broadcast** to all of the user's online desktops. A **Tauri tray app** receives it and, depending on its own mode, **copies** it (default) or copies and **pastes** it into the focused app. See [Desktop push](#desktop-push-m3). |
+| Deferred | Local/other ASR providers. The provider interface exists so they can be added later. |
 
 ## M0 findings (2026-10-14, model spike: `server/spike/qwen-realtime.ts`)
 - **Endpoint.** Use the workspace host, not the generic DashScope host:
@@ -176,5 +177,69 @@ PCM16LE, 16 kHz, mono, 100 ms each (3200 B).
 3. **M2 — Android**
    - The Setup screen, `PoodService`, the bubble and window, streaming and partials, copy/auto-copy, and the History screen.
    - Ship a debug APK.
-4. **Next (not now):** desktop push, more providers (qwen3-asr realtime, OpenAI-compatible, local), a Quick Settings
+4. **M3 — Desktop push**: see [Desktop push](#desktop-push-m3).
+5. **Next (not now):** more providers (qwen3-asr realtime, OpenAI-compatible, local), a Quick Settings
    tile, and history search.
+
+## Desktop push (M3)
+Speak on the phone and the text lands on every laptop or PC you are signed in on.
+
+```
+Phone ──audio──▶ Gateway ──final──▶ Phone (unchanged)
+                    └──transcript──▶ every online desktop of the same user ──▶ copy / paste
+```
+
+### Gateway
+- **`/v1/desktop?name=<host>`** is a new WebSocket that desktops keep open. Auth is the same as for the phone: the
+  laptop is on the tailnet, so `tailscale serve` already stamps it with `narze@github`. There is no pairing and no
+  token. The fallback token still works for odd setups.
+- **Fan-out.** The server sends `{type:"hello", user}` on connect. On every non-empty final it sends
+  `{type:"transcript", id, text, device, createdAt}` to all desktop sockets of the same user. Pings are sent every 20 s.
+- **Delivery is live only.** Offline desktops miss it, and the text stays in history. The phone's `final` gains
+  `delivered: string[]` (desktop names) so the panel can show "→ MacBook ✓".
+- **`POST /v1/push {id}`** re-broadcasts a history item. Its trigger is the "Send to desktops" action on the phone.
+- **Paste guard.** Each transcript carries `fresh: true` only when it is sent within 10 s of the phone's `stop`.
+  Desktops paste only fresh transcripts. Re-sends from history only copy, so nothing is typed into a random window
+  later.
+
+### Desktop app (`desktop/`, Tauri v2)
+- A **tray-only** app with no main window. The tray icon shows the connection state (connected, connecting, off), and a
+  small settings window opens from the tray menu.
+- **The Rust side owns the socket.** It uses `tokio-tungstenite` with reconnect and backoff (1→30 s), so it keeps working
+  while no webview is open.
+- **Tray menu:**
+  - status line
+  - mode: **Copy** / **Copy + paste**
+  - **Pause receiving**: needed because the push is a broadcast
+  - the last 5 transcripts (click to copy)
+  - Settings…
+  - Quit
+- **Copy** uses `tauri-plugin-clipboard-manager` and shows a notification through `tauri-plugin-notification` with the
+  first ~80 characters.
+- **Paste** copies the text and then sends Cmd/Ctrl+V with `enigo`.
+  - On macOS this needs Accessibility permission. The app checks for it and links to the settings pane.
+  - Linux Wayland may need `ydotool`. X11 works out of the box.
+- **Settings** are the gateway URL, the device name (default: hostname), the mode, and launch at login
+  (`tauri-plugin-autostart`). They are stored as JSON in the app config dir.
+- **Builds:**
+  - Unsigned local builds first: `.app`/`.dmg`, `.AppImage`/`.deb`, `.msi`.
+  - On macOS, every unsigned rebuild invalidates the Accessibility grant. Use a stable self-signed identity or re-grant.
+  - CI release builds come later.
+
+### Android
+- The panel shows "→ MacBook, Desktop-PC ✓" under the transcript when `delivered` is non-empty.
+- History items get a "Send to desktops" action, which calls `POST /v1/push`.
+
+### Steps
+1. Gateway: `/v1/desktop`, fan-out, `delivered`, and `/v1/push`, with tests for multiple desktops, other users, and
+   empty finals. A `scripts/desktop.ts` CLI prints received transcripts.
+2. Tauri scaffold: tray, socket, copy and notification. Test end to end on this Mac.
+3. Paste mode and the Accessibility check.
+4. Settings window and autostart.
+5. Android: show `delivered` and add the history send action.
+6. Linux and Windows builds, plus a README.
+
+### Later
+- Stream live partials to a desktop overlay.
+- Per-desktop targeting from the phone, if broadcast gets annoying.
+- Signed releases.

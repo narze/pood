@@ -1,6 +1,6 @@
 # Pood protocol v1
 
-This is how the Pood client (the Android app) talks to the Pood gateway. Every path below is served by the gateway; the
+This is how Pood clients (the Android app and desktop receivers) talk to the Pood gateway. Every path below is served by the gateway; the
 client never talks to an ASR provider directly.
 
 ## Auth
@@ -56,7 +56,7 @@ A connection carries at most one utterance at a time:
 ```jsonc
 {"type": "ready",   "user": "you@github", "model": "qwen3.8-omni-flash-realtime"}   // sent on connect
 {"type": "partial", "utteranceId": "u1", "text": "confirmed", "stash": " still changing"}
-{"type": "final",   "utteranceId": "u1", "id": 42, "text": "...", "durationMs": 3100, "latencyMs": 410}
+{"type": "final",   "utteranceId": "u1", "id": 42, "text": "...", "durationMs": 3100, "latencyMs": 410, "delivered": ["MacBook"]}
 {"type": "error",   "utteranceId": "u1", "code": "busy|bad_request|upstream|too_long", "message": "..."}
 ```
 
@@ -67,5 +67,23 @@ Notes:
   sends a `final` with `id: null` and `text: ""` and saves nothing.
 - **Length limit.** An utterance longer than `maxUtteranceSeconds` is stopped automatically. The server sends
   `error` with code `too_long`, then a `final` for the audio up to that point.
+- **Delivered.** `delivered` lists the names of the desktops the transcript was broadcast to (see below). It is empty
+  when no desktop was connected or the final is empty.
 - **Errors.** `error` codes `busy` and `bad_request` describe a single bad message; the utterance, if any, keeps going.
   The `upstream` code means the utterance failed and no `final` will follow.
+
+## WebSocket: `/v1/desktop?name=<name>`
+
+Desktop receivers keep this socket open to get every transcript their user speaks, from any phone. Auth is the same as
+above; on the tailnet, a laptop logged in as the same Tailscale user is accepted without a token. `name` is shown back
+to the phone in `final.delivered`.
+
+The socket is receive-only; anything the desktop sends is ignored. The server pings idle sockets and drops dead ones.
+
+### Server → desktop
+```jsonc
+{"type": "hello",      "user": "you@github"}                                                   // sent on connect
+{"type": "transcript", "id": 42, "text": "...", "device": "pixel", "createdAt": 1760500000000} // on every non-empty final
+```
+
+Delivery is live only: a desktop that is offline misses the transcript, which remains in history.

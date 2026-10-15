@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "No windows yet; the tray runs natively.",
+  "windows": [],
+  "permissions": []
+}
