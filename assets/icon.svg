@@ -1,4 +1,12 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <rect width="64" height="64" rx="14" fill="#c026d3"/>
-  <text x="32" y="32" dy="0.35em" text-anchor="middle" font-family="ui-sans-serif, system-ui, -apple-system, sans-serif" font-size="32" font-weight="600" fill="#ffffff">P</text>
+  <g transform="translate(32 32) scale(1.1) translate(-21 -19.5)">
+    <circle cx="16" cy="14" r="7" fill="#fff"/>
+    <path d="M3 38c0-8 5-13 13-13s13 5 13 13z" fill="#fff"/>
+    <g fill="none" stroke="#fff" stroke-width="2.8" stroke-linecap="round">
+      <path d="M27 8.5a8.5 8.5 0 0 1 0 11"/>
+      <path d="M32 4.5a14 14 0 0 1 0 19"/>
+      <path d="M37 0.8a19 19 0 0 1 0 26.4"/>
+    </g>
+  </g>
 </svg>
