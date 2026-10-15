@@ -31,6 +31,7 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
    tap **Copy**.
 4. Paste it anywhere.
 5. Tap **Hide** to collapse the window back to the bubble.
+6. To turn the bubble off, drag it onto the ✕ that appears at the bottom of the screen and let go.
 
 The window also shows the 3 most recent transcripts; tap one to copy it again. The full history is on the main screen.
 
