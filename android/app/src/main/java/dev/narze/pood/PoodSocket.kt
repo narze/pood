@@ -20,7 +20,14 @@ enum class Conn { Disconnected, Connecting, Connected }
 sealed interface ServerEvent {
     data class Ready(val user: String, val model: String) : ServerEvent
     data class Partial(val utteranceId: String, val text: String, val stash: String) : ServerEvent
-    data class Final(val utteranceId: String, val id: Long?, val text: String, val latencyMs: Long) : ServerEvent
+    data class Final(
+        val utteranceId: String,
+        val id: Long?,
+        val text: String,
+        val latencyMs: Long,
+        /** Desktops that received the transcript; empty from gateways that predate desktop push. */
+        val delivered: List<String> = emptyList(),
+    ) : ServerEvent
     /** `code == "connection"` means the socket dropped (not a protocol error). */
     data class Error(val utteranceId: String?, val code: String, val message: String) : ServerEvent
 }
@@ -100,6 +107,7 @@ class PoodSocket(private val url: String, private val scope: CoroutineScope) {
                     if (m.isNull("id")) null else m.getLong("id"),
                     m.getString("text"),
                     m.optLong("latencyMs"),
+                    m.optJSONArray("delivered")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
                 )
                 "error" -> ServerEvent.Error(
                     if (m.has("utteranceId")) m.getString("utteranceId") else null,

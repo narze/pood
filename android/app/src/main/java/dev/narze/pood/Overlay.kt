@@ -99,6 +99,13 @@ private fun Panel(s: UiState, onCollapse: () -> Unit, onToggle: () -> Unit, onCo
             }
 
             Transcript(s)
+            if (s.phase == Phase.Idle && s.delivered.isNotEmpty()) Text(
+                "→ ${s.delivered.distinct().joinToString(", ")} ✓",
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
 
             Row(verticalAlignment = Alignment.CenterVertically) {
                 RecordButton(s, onToggle)
