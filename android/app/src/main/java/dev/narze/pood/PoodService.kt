@@ -43,6 +43,7 @@ data class UiState(
     val stash: String = "",
     val text: String = "",
     val copied: Boolean = false,
+    val delivered: List<String> = emptyList(),
     val error: String? = null,
     val level: Float = 0f,
     val recent: List<Transcript> = emptyList(),
@@ -140,7 +141,7 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
             _state.update { it.copy(error = e.message) }
             return
         }
-        _state.update { it.copy(phase = Phase.Recording, partial = "", stash = "", text = "", copied = false, error = null) }
+        _state.update { it.copy(phase = Phase.Recording, partial = "", stash = "", text = "", copied = false, delivered = emptyList(), error = null) }
     }
 
     private fun stopRecording() {
@@ -171,6 +172,7 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
                         phase = Phase.Idle,
                         text = event.text,
                         copied = copied,
+                        delivered = event.delivered,
                         error = if (event.text.isEmpty()) "Didn't catch that" else null,
                         recent = if (event.id == null) s.recent
                         else (listOf(Transcript(event.id, System.currentTimeMillis(), event.text, Build.MODEL)) + s.recent).take(3),
