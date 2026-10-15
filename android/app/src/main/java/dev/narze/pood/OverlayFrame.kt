@@ -14,6 +14,7 @@ import kotlin.math.abs
 @SuppressLint("ViewConstructor")
 class OverlayFrame(
     context: Context,
+    private val onDragStart: () -> Unit,
     private val onDrag: (dx: Float, dy: Float) -> Unit,
     private val onDragEnd: () -> Unit,
 ) : FrameLayout(context) {
@@ -33,6 +34,7 @@ class OverlayFrame(
             MotionEvent.ACTION_MOVE -> if (!dragging && (abs(ev.rawX - downX) > slop || abs(ev.rawY - downY) > slop)) {
                 dragging = true
                 lastX = ev.rawX; lastY = ev.rawY
+                onDragStart()
             }
         }
         return dragging
@@ -45,7 +47,10 @@ class OverlayFrame(
                 downX = ev.rawX; downY = ev.rawY; lastX = ev.rawX; lastY = ev.rawY
             }
             MotionEvent.ACTION_MOVE -> {
-                if (!dragging && (abs(ev.rawX - downX) > slop || abs(ev.rawY - downY) > slop)) dragging = true
+                if (!dragging && (abs(ev.rawX - downX) > slop || abs(ev.rawY - downY) > slop)) {
+                    dragging = true
+                    onDragStart()
+                }
                 if (dragging) {
                     onDrag(ev.rawX - lastX, ev.rawY - lastY)
                     lastX = ev.rawX; lastY = ev.rawY
