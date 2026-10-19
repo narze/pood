@@ -1,6 +1,11 @@
 package dev.narze.pood
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,6 +14,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -60,6 +66,31 @@ fun OverlayContent(
     }
 }
 
+/** Messenger-style "drop here to close" target, shown at the bottom of the screen while the bubble is dragged. */
+@Composable
+fun DismissTarget(state: StateFlow<UiState>) {
+    val s by state.collectAsStateWithLifecycle()
+    val grow by animateFloatAsState(if (s.overDismiss) 1.25f else 1f, label = "grow")
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        AnimatedVisibility(
+            visible = s.dragging && !s.expanded,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
+        ) {
+            Box(
+                Modifier
+                    .size(PoodService.DISMISS_DP.dp)
+                    .scale(grow)
+                    .background(Color.Black.copy(alpha = if (s.overDismiss) 0.75f else 0.5f), CircleShape)
+                    .border(2.dp, Color.White.copy(alpha = 0.8f), CircleShape),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(painterResource(R.drawable.ic_close), contentDescription = "Close bubble", tint = Color.White)
+            }
+        }
+    }
+}
+
 @Composable
 private fun Bubble(s: UiState, onExpand: () -> Unit) {
     val recording = s.phase == Phase.Recording
@@ -75,7 +106,7 @@ private fun Bubble(s: UiState, onExpand: () -> Unit) {
         contentAlignment = Alignment.Center,
     ) {
         if (s.phase == Phase.Transcribing) CircularProgressIndicator(Modifier.size(24.dp), color = Color.White, strokeWidth = 2.dp)
-        else Icon(painterResource(R.drawable.ic_mic), contentDescription = "Pood", tint = Color.White)
+        else Icon(painterResource(R.drawable.ic_speaking), contentDescription = "Pood", tint = Color.White)
         ConnDot(s.conn, Modifier.align(Alignment.TopEnd))
     }
 }

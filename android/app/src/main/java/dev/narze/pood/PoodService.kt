@@ -15,6 +15,8 @@ import android.graphics.PixelFormat
 import android.os.Build
 import android.provider.Settings as AndroidSettings
 import android.view.Gravity
+import android.view.WindowInsets
+import android.view.HapticFeedbackConstants
 import android.view.WindowManager
 import androidx.compose.ui.platform.ComposeView
 import androidx.core.app.NotificationCompat
@@ -33,6 +35,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.util.UUID
+import kotlin.math.hypot
 
 enum class Phase { Idle, Recording, Transcribing }
 
@@ -48,6 +51,8 @@ data class UiState(
     val level: Float = 0f,
     val recent: List<Transcript> = emptyList(),
     val expanded: Boolean = false,
+    val dragging: Boolean = false,
+    val overDismiss: Boolean = false,
 )
 
 /**
@@ -63,6 +68,10 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
     private lateinit var api: PoodApi
     private lateinit var windowManager: WindowManager
     private var overlay: OverlayFrame? = null
+    private var dismissTarget: ComposeView? = null
+    // Where the finger has dragged the window to; differs from params while the bubble is snapped onto the dismiss target.
+    private var dragX = 0f
+    private var dragY = 0f
     private val params = WindowManager.LayoutParams(
         WindowManager.LayoutParams.WRAP_CONTENT,
         WindowManager.LayoutParams.WRAP_CONTENT,
@@ -110,6 +119,8 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
         socket.close()
         overlay?.let { windowManager.removeView(it) }
         overlay = null
+        dismissTarget?.let { windowManager.removeView(it) }
+        dismissTarget = null
         _state.value = UiState()
         _running.value = false
         super.onDestroy()
@@ -215,13 +226,57 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
                 )
             }
         }
-        val frame = OverlayFrame(this, onDrag = ::moveBy, onDragEnd = ::dragEnded).apply {
+        val frame = OverlayFrame(this, onDragStart = ::dragStarted, onDrag = ::moveBy, onDragEnd = ::dragEnded).apply {
             addView(compose)
             setViewTreeLifecycleOwner(this@PoodService)
             setViewTreeSavedStateRegistryOwner(this@PoodService)
         }
+        showDismissTarget()
         windowManager.addView(frame, params)
         overlay = frame
+    }
+
+    /** Untouchable window at the bottom of the screen; its content is only visible while the bubble is dragged. */
+    private fun showDismissTarget() {
+        val metrics = resources.displayMetrics
+        val sizePx = (DISMISS_WINDOW_DP * metrics.density).toInt()
+        val targetParams = WindowManager.LayoutParams(
+            sizePx,
+            sizePx,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            val (cx, cy) = dismissCenter()
+            x = (cx - sizePx / 2f).toInt()
+            y = (cy - sizePx / 2f).toInt()
+        }
+        val view = ComposeView(this).apply {
+            setContent { PoodTheme { DismissTarget(state) } }
+            setViewTreeLifecycleOwner(this@PoodService)
+            setViewTreeSavedStateRegistryOwner(this@PoodService)
+        }
+        windowManager.addView(view, targetParams)
+        dismissTarget = view
+    }
+
+    /** Center of the dismiss target in overlay coordinates, which start below the status bar and end above the nav bar. */
+    private fun dismissCenter(): Pair<Float, Float> {
+        val metrics = resources.displayMetrics
+        val (width, height) = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val window = windowManager.currentWindowMetrics
+            val insets = window.windowInsets.getInsetsIgnoringVisibility(
+                WindowInsets.Type.systemBars() or WindowInsets.Type.displayCutout(),
+            )
+            window.bounds.width() to window.bounds.height() - insets.top - insets.bottom
+        } else {
+            // displayMetrics already excludes the nav bar here; drop the status bar too.
+            val statusBar = resources.getIdentifier("status_bar_height", "dimen", "android")
+                .takeIf { it != 0 }?.let(resources::getDimensionPixelSize) ?: 0
+            metrics.widthPixels to metrics.heightPixels - statusBar
+        }
+        return width / 2f to height - (DISMISS_BOTTOM_DP + DISMISS_WINDOW_DP / 2f) * metrics.density
     }
 
     private fun setExpanded(expanded: Boolean) {
@@ -242,14 +297,43 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
         overlay?.let { windowManager.updateViewLayout(it, params) }
     }
 
+    private fun dragStarted() {
+        dragX = params.x.toFloat()
+        dragY = params.y.toFloat()
+        _state.update { it.copy(dragging = true, overDismiss = false) }
+    }
+
     private fun moveBy(dx: Float, dy: Float) {
         val metrics = resources.displayMetrics
-        params.x = (params.x + dx.toInt()).coerceIn(0, metrics.widthPixels - 1)
-        params.y = (params.y + dy.toInt()).coerceIn(0, metrics.heightPixels - 1)
+        dragX = (dragX + dx).coerceIn(0f, metrics.widthPixels - 1f)
+        dragY = (dragY + dy).coerceIn(0f, metrics.heightPixels - 1f)
+        params.x = dragX.toInt()
+        params.y = dragY.toInt()
+
+        if (!_state.value.expanded) {
+            // Magnet: once the bubble is close enough to the dismiss target, it snaps onto it until dragged away.
+            val half = BUBBLE_DP * metrics.density / 2f
+            val (cx, cy) = dismissCenter()
+            val over = hypot(dragX + half - cx, dragY + half - cy) < DISMISS_RADIUS_DP * metrics.density
+            if (over) {
+                params.x = (cx - half).toInt()
+                params.y = (cy - half).toInt()
+            }
+            if (over != _state.value.overDismiss) {
+                if (over) overlay?.performHapticFeedback(HapticFeedbackConstants.VIRTUAL_KEY)
+                _state.update { it.copy(overDismiss = over) }
+            }
+        }
         overlay?.let { windowManager.updateViewLayout(it, params) }
     }
 
     private fun dragEnded() {
+        val dismissed = _state.value.overDismiss
+        _state.update { it.copy(dragging = false, overDismiss = false) }
+        if (dismissed) {
+            stopSelf()
+            return
+        }
         if (_state.value.expanded) return
         val metrics = resources.displayMetrics
         val bubblePx = (BUBBLE_DP * metrics.density).toInt()
@@ -277,7 +361,7 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
             this, 2, Intent(this, PoodService::class.java).setAction(ACTION_TOGGLE), PendingIntent.FLAG_IMMUTABLE,
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL)
-            .setSmallIcon(R.drawable.ic_mic)
+            .setSmallIcon(R.drawable.ic_speaking)
             .setContentTitle("Pood is ready")
             .setContentText("Tap the bubble to speak")
             .setContentIntent(open)
@@ -291,6 +375,10 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
     companion object {
         const val BUBBLE_DP = 56
         const val PANEL_DP = 300
+        const val DISMISS_DP = 64
+        private const val DISMISS_WINDOW_DP = 120 // room for the target to grow and slide in
+        private const val DISMISS_BOTTOM_DP = 24
+        private const val DISMISS_RADIUS_DP = 80
         private const val PANEL_MAX_HEIGHT_DP = 440
         private const val CHANNEL = "bubble"
         private const val NOTIFICATION_ID = 1
