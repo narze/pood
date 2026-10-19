@@ -83,7 +83,10 @@ The socket is receive-only; anything the desktop sends is ignored. The server pi
 ### Server → desktop
 ```jsonc
 {"type": "hello",      "user": "you@github"}                                                   // sent on connect
-{"type": "transcript", "id": 42, "text": "...", "device": "pixel", "createdAt": 1760500000000} // on every non-empty final
+{"type": "transcript", "id": 42, "text": "...", "device": "pixel", "createdAt": 1760500000000, "fresh": true} // on every non-empty final
 ```
+
+`fresh` is `true` only when the transcript is broadcast within 10 s of the phone's `stop`. Desktops in paste mode paste
+fresh transcripts and only copy the rest. Anything re-sent from history is never fresh.
 
 Delivery is live only: a desktop that is offline misses the transcript, which remains in history.

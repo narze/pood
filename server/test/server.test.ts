@@ -49,12 +49,13 @@ afterEach(() => {
   finalText = "สวัสดี hello.";
 });
 
-function setup(maxUtteranceSeconds = 60) {
+function setup(maxUtteranceSeconds = 60, freshMs?: number) {
   const history = new History(":memory:");
   const server = createServer({
     config: { hostname: "127.0.0.1", port: 0, maxUtteranceSeconds, auth: { allowedUsers: ["me@github"], tokens: ["secret"] } },
     provider,
     history,
+    freshMs,
   });
   cleanup.push(() => server.stop(true));
   const base = `http://127.0.0.1:${server.port}`;
@@ -213,10 +214,22 @@ test("broadcasts finals to every desktop of the same user only", async () => {
   expect(final.delivered.sort()).toEqual(["Desktop-PC", "MacBook"]);
 
   await Bun.sleep(50);
-  const expected = { type: "transcript", id: final.id, text: "สวัสดี hello", device: "test", createdAt: expect.any(Number) };
+  const expected = { type: "transcript", id: final.id, text: "สวัสดี hello", device: "test", createdAt: expect.any(Number), fresh: true };
   expect(mac.got).toEqual([expected]);
   expect(pc.got).toEqual([expected]);
   expect(other.got).toEqual([]);
+});
+
+test("transcripts that take too long after stop are not fresh", async () => {
+  const { base, ws: url } = setup(60, 0); // any latency exceeds the window
+  const mac = await desktop(base, "MacBook");
+  const c = await connect(url);
+  c.json({ type: "start", utteranceId: "u1" });
+  c.ws.send(audio(400));
+  c.json({ type: "stop", utteranceId: "u1" });
+  await c.next("final");
+  await Bun.sleep(50);
+  expect(mac.got).toEqual([expect.objectContaining({ type: "transcript", text: "สวัสดี hello", fresh: false })]);
 });
 
 test("silent finals are not broadcast; closed desktops are forgotten", async () => {

@@ -9,6 +9,9 @@ import type { AsrProvider, AsrSession } from "./provider";
 /** Less voiced audio than this is treated as "nothing said" and never sent to the model. */
 const MIN_VOICED_MS = 300;
 
+/** A transcript broadcast within this long of the phone's `stop` is `fresh`: the user is still waiting on it, so desktops may paste it. */
+const FRESH_MS = 10_000;
+
 interface Utterance {
   id: string;
   session: AsrSession;
@@ -33,18 +36,20 @@ export interface Deps {
   config: Pick<Config, "hostname" | "port" | "auth" | "maxUtteranceSeconds">;
   provider: AsrProvider;
   history: History;
+  /** Override of FRESH_MS, for tests. */
+  freshMs?: number;
   log?: (msg: string) => void;
 }
 
-export function createServer({ config, provider, history, log = () => {} }: Deps) {
+export function createServer({ config, provider, history, freshMs = FRESH_MS, log = () => {} }: Deps) {
   const send = (ws: Socket, msg: object) => ws.send(JSON.stringify(msg));
   const maxBytes = config.maxUtteranceSeconds * 1000 * BYTES_PER_MS;
   const desktops = new Map<string, Set<Socket>>(); // user → connected desktops
 
   /** Sends a transcript to every connected desktop of its user; returns their names. */
-  function broadcast(user: string, t: Transcript): string[] {
+  function broadcast(user: string, t: Transcript, fresh: boolean): string[] {
     const targets = [...(desktops.get(user) ?? [])];
-    for (const d of targets) send(d, { type: "transcript", id: t.id, text: t.text, device: t.device, createdAt: t.createdAt });
+    for (const d of targets) send(d, { type: "transcript", id: t.id, text: t.text, device: t.device, createdAt: t.createdAt, fresh });
     return targets.map((d) => d.data.device);
   }
 
@@ -59,11 +64,12 @@ export function createServer({ config, provider, history, log = () => {} }: Deps
         ws.data.utterance = undefined;
         const text = cleanTranscript(result.text);
         const durationMs = Math.round(utterance.bytes / BYTES_PER_MS);
-        const latencyMs = Math.round(performance.now() - (utterance.stoppedAt ?? performance.now()));
+        const sinceStop = performance.now() - (utterance.stoppedAt ?? performance.now());
+        const latencyMs = Math.round(sinceStop);
         const saved = text
           ? history.add({ user: ws.data.user, device: ws.data.device, text, asrText: result.asrText ?? "", model: provider.model, durationMs, latencyMs })
           : null;
-        const delivered = saved ? broadcast(ws.data.user, saved) : [];
+        const delivered = saved ? broadcast(ws.data.user, saved, sinceStop <= freshMs) : [];
         log(`final ${ws.data.user} ${durationMs}ms audio, ${latencyMs}ms latency, delivered to ${delivered.length}`);
         send(ws, { type: "final", utteranceId: id, id: saved?.id ?? null, text, durationMs, latencyMs, delivered });
       },
