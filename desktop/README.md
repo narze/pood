@@ -42,6 +42,15 @@ menu bar (**Open config.json…**), then choose **Reconnect**:
 | Outline person speaking | Connecting |
 | Struck-through person speaking | Disconnected; the menu shows why |
 
+## Pause and recent transcripts
+
+**Pause receiving** in the menu bar makes this machine ignore incoming transcripts: nothing is copied, pasted or
+announced, and the status line reads "Paused · …". The choice is saved as `"paused"` in `config.json`, so it survives a
+restart. Other desktops keep receiving.
+
+**Recent transcripts** lists the last 5 received here, newest first and shortened to one line. Click one to copy it.
+The list lives in memory and starts empty after a restart; transcripts that arrive while paused are not added to it.
+
 ## Paste mode
 
 Choose **Copy + paste** in the menu bar. Every transcript is still copied; a *fresh* one is then pasted into the focused

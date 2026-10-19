@@ -24,6 +24,9 @@ pub struct Config {
     /// `"copy"` (default) or `"paste"`; also switchable from the menu.
     #[serde(default)]
     pub mode: Mode,
+    /// While true, incoming transcripts are ignored; also switchable from the menu.
+    #[serde(default)]
+    pub paused: bool,
     /// Only needed when not going through `tailscale serve`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token: Option<String>,
@@ -53,8 +56,17 @@ impl Config {
 
     /// Persists a new mode, keeping the rest of the file as it is on disk.
     pub fn set_mode(path: &Path, mode: Mode) -> Result<(), String> {
+        Config::update(path, |c| c.mode = mode)
+    }
+
+    /// Persists the pause state, keeping the rest of the file as it is on disk.
+    pub fn set_paused(path: &Path, paused: bool) -> Result<(), String> {
+        Config::update(path, |c| c.paused = paused)
+    }
+
+    fn update(path: &Path, change: impl FnOnce(&mut Config)) -> Result<(), String> {
         let mut config = Config::load(path)?;
-        config.mode = mode;
+        change(&mut config);
         config.save(path)
     }
 
@@ -95,7 +107,7 @@ mod tests {
     use super::*;
 
     fn with_url(url: &str) -> Config {
-        Config { url: url.into(), name: "Mac Book".into(), mode: Mode::Copy, token: None }
+        Config { url: url.into(), name: "Mac Book".into(), mode: Mode::Copy, paused: false, token: None }
     }
 
     #[test]
@@ -114,6 +126,21 @@ mod tests {
         Config::set_mode(&path, Mode::Paste).unwrap();
         assert_eq!(Config::load(&path).unwrap().mode, Mode::Paste);
         assert!(fs::read_to_string(&path).unwrap().contains("\"mode\": \"paste\""));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn paused_defaults_to_off_and_persists_without_touching_the_rest() {
+        assert!(!serde_json::from_str::<Config>("{}").unwrap().paused);
+        let path = std::env::temp_dir().join(format!("pood-config-paused-test-{}.json", std::process::id()));
+        let _ = fs::remove_file(&path);
+        Config::set_mode(&path, Mode::Paste).unwrap();
+        Config::set_paused(&path, true).unwrap();
+        let reloaded = Config::load(&path).unwrap();
+        assert!(reloaded.paused);
+        assert_eq!(reloaded.mode, Mode::Paste);
+        Config::set_paused(&path, false).unwrap();
+        assert!(!Config::load(&path).unwrap().paused);
         let _ = fs::remove_file(&path);
     }
 }
