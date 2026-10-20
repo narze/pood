@@ -1,0 +1,181 @@
+#!/usr/bin/env bash
+# Drives a disposable Pood gateway for verification. See ../SKILL.md.
+#
+#   pood-verify launch                       start an isolated gateway; prints `export POOD_VERIFY_RUN=<id>`
+#   pood-verify doctor                       read-only: is this run's gateway worth driving?
+#   pood-verify clip <name> <voice> <text>   synthesize speech with macOS `say` → evidence/<name>.pcm
+#   pood-verify silence <name> <seconds>     write a silent clip → evidence/<name>.pcm
+#   pood-verify speak <name>                 stream evidence/<name>.pcm over /v1/ws like the phone → evidence/speak-<name>.jsonl
+#   pood-verify listen <name>                start a desktop receiver on /v1/desktop → evidence/desktop-<name>.log
+#   pood-verify api <METHOD> <path>          authenticated HTTP call; prints status + body, appends to evidence/api.log
+#   pood-verify db <sql>                     read-only SQL against this run's pood.db
+#   pood-verify cleanup                      stop everything this run started, delete scratch; keeps evidence
+#
+# Every command except launch acts on $POOD_VERIFY_RUN.
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../../.." && pwd)"
+SERVER="$REPO/server"
+SCRATCH_ROOT="${TMPDIR:-/tmp}/pood-verify"
+EVIDENCE_ROOT="$REPO/artifacts/verify-pood"
+
+die() { echo "pood-verify: $*" >&2; exit 1; }
+
+load() {
+  [[ -n "${POOD_VERIFY_RUN:-}" ]] || die "set POOD_VERIFY_RUN (printed by launch)"
+  RUN="$POOD_VERIFY_RUN"
+  DIR="$SCRATCH_ROOT/$RUN"
+  EVID="$EVIDENCE_ROOT/$RUN"
+  [[ -f "$DIR/state.env" ]] || die "no run $RUN in $DIR (already cleaned up?)"
+  # shellcheck disable=SC1091
+  source "$DIR/state.env"
+}
+
+alive() { kill -0 "$1" 2>/dev/null; }
+
+cmd_launch() {
+  [[ -f "$SERVER/.env" ]] && grep -q '^DASHSCOPE_API_KEY=.' "$SERVER/.env" || [[ -n "${DASHSCOPE_API_KEY:-}" ]] \
+    || die "DASHSCOPE_API_KEY missing: put it in server/.env or the environment"
+  [[ -d "$SERVER/node_modules" ]] || (cd "$SERVER" && bun install --frozen-lockfile >/dev/null)
+
+  RUN="$(date +%Y%m%d-%H%M%S)-$$"
+  DIR="$SCRATCH_ROOT/$RUN"
+  EVID="$EVIDENCE_ROOT/$RUN"
+  mkdir -p "$DIR" "$EVID"
+
+  # Pick a free port that is not the user's 8790.
+  PORT=$(bun -e 'const s=Bun.serve({port:0,hostname:"127.0.0.1",fetch:()=>new Response()});console.log(s.port);s.stop(true)')
+  TOKEN="verify$(openssl rand -hex 12)"
+  cat >"$DIR/pood.toml" <<EOF
+# Verification scaffolding for run $RUN; deleted by \`pood-verify cleanup\`.
+hostname = "127.0.0.1"
+port = $PORT
+dbPath = "$DIR/pood.db"
+maxUtteranceSeconds = 120
+
+[auth]
+allowedUsers = []
+tokens = ["$TOKEN"]
+
+[qwen]
+realtimeUrl = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime"
+model = "qwen3.8-omni-flash-realtime"
+EOF
+
+  # cwd = server/ so Bun auto-loads server/.env (DASHSCOPE_API_KEY). PORT env would override the toml; unset it.
+  # Spawn directly (no wrapping subshell) so $! is bun itself and no shell keeps our stdout open.
+  cd "$SERVER"
+  nohup env -u PORT POOD_CONFIG="$DIR/pood.toml" bun src/main.ts </dev/null >"$EVID/server.log" 2>&1 &
+  SERVER_PID=$!
+  cd - >/dev/null
+  cat >"$DIR/state.env" <<EOF
+PORT=$PORT
+TOKEN=$TOKEN
+SERVER_PID=$SERVER_PID
+BASE=http://127.0.0.1:$PORT
+USER_ID=token:${TOKEN:0:4}
+EVID=$EVID
+EOF
+  git -C "$REPO" rev-parse --short HEAD >"$EVID/revision.txt"
+
+  for _ in $(seq 1 50); do
+    alive "$SERVER_PID" || { cat "$EVID/server.log" >&2; die "gateway exited during startup (log: $EVID/server.log)"; }
+    if grep -q "pood-server listening on http://127.0.0.1:$PORT" "$EVID/server.log" \
+      && curl -fsS -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:$PORT/v1/me" >/dev/null 2>&1; then
+      echo "ready: http://127.0.0.1:$PORT  pid $SERVER_PID  evidence $EVID"
+      echo "export POOD_VERIFY_RUN=$RUN"
+      return
+    fi
+    sleep 0.2
+  done
+  die "gateway not ready after 10s (log: $EVID/server.log)"
+}
+
+cmd_doctor() {
+  load
+  local ok=1
+  check() { if eval "$2" >/dev/null 2>&1; then echo "ok   $1"; else echo "FAIL $1"; ok=0; fi; }
+  echo "run $RUN  base $BASE  pid $SERVER_PID  evidence $EVID"
+  check "gateway process alive" "alive $SERVER_PID"
+  check "port $PORT owned by our pid" "lsof -nP -a -p $SERVER_PID -iTCP:$PORT -sTCP:LISTEN"
+  check "/healthz ok" "curl -fsS $BASE/healthz | jq -e '.ok == true'"
+  check "/v1/me accepts our token as $USER_ID" "curl -fsS -H 'Authorization: Bearer $TOKEN' $BASE/v1/me | jq -e '.user == \"$USER_ID\"'"
+  check "/v1/me rejects no auth (401)" "[ \$(curl -s -o /dev/null -w '%{http_code}' $BASE/v1/me) = 401 ]"
+  check "db is this run's scratch db" "[ -f $DIR/pood.db ]"
+  echo "build: $(cat "$EVID/revision.txt") (HEAD now $(git -C "$REPO" rev-parse --short HEAD); restart if they differ)"
+  [[ $ok = 1 ]] || exit 1
+}
+
+cmd_clip() {
+  load
+  local name="$1" voice="$2" text="$3"
+  say -v "$voice" -o "$DIR/$name.aiff" "$text"
+  ffmpeg -loglevel error -y -i "$DIR/$name.aiff" -ar 16000 -ac 1 -f s16le "$EVID/$name.pcm"
+  printf '%s\t%s\t%s\n' "$name" "$voice" "$text" >>"$EVID/clips.tsv"
+  echo "$EVID/$name.pcm ($(( $(stat -f%z "$EVID/$name.pcm") / 32 )) ms)"
+}
+
+cmd_silence() {
+  load
+  ffmpeg -loglevel error -y -f lavfi -i anullsrc=r=16000:cl=mono -t "$2" -f s16le "$EVID/$1.pcm"
+  printf '%s\tsilence\t%ss\n' "$1" "$2" >>"$EVID/clips.tsv"
+  echo "$EVID/$1.pcm"
+}
+
+cmd_speak() {
+  load
+  local name="$1"
+  [[ -f "$EVID/$name.pcm" ]] || die "no clip $EVID/$name.pcm (make one with clip/silence)"
+  # scripts/client.ts is the repo's phone stand-in: start → 100 ms PCM frames in real time → stop → wait for final.
+  (cd "$SERVER" && timeout 180 bun scripts/client.ts "$EVID/$name.pcm" "ws://127.0.0.1:$PORT/v1/ws" "$TOKEN" 2>&1) \
+    | tr '\r' '\n' | sed -u $'s/\x1b\\[K//; /^$/d' | tee "$EVID/speak-$name.jsonl"
+}
+
+cmd_listen() {
+  load
+  local name="$1"
+  cd "$SERVER"
+  nohup bun scripts/desktop.ts "ws://127.0.0.1:$PORT/v1/desktop" "$name" "$TOKEN" </dev/null >"$EVID/desktop-$name.log" 2>&1 &
+  echo $! >>"$DIR/listeners.pid"
+  cd - >/dev/null
+  for _ in $(seq 1 25); do
+    grep -q "connected as" "$EVID/desktop-$name.log" 2>/dev/null && { cat "$EVID/desktop-$name.log"; return; }
+    sleep 0.2
+  done
+  die "desktop receiver $name did not connect (log: $EVID/desktop-$name.log)"
+}
+
+cmd_api() {
+  load
+  local method="$1" path="$2" out
+  out=$(curl -sS -X "$method" -H "Authorization: Bearer $TOKEN" -w '\nHTTP %{http_code}' "$BASE$path")
+  printf '### %s %s\n%s\n\n' "$method" "$path" "$out" >>"$EVID/api.log"
+  echo "$out"
+}
+
+cmd_db() {
+  load
+  sqlite3 -readonly -header -column "$DIR/pood.db" "$1" | tee -a "$EVID/db.log"
+}
+
+cmd_cleanup() {
+  load
+  if [[ -f "$DIR/listeners.pid" ]]; then
+    while read -r pid; do alive "$pid" && kill "$pid"; done <"$DIR/listeners.pid"
+  fi
+  if alive "$SERVER_PID"; then
+    kill "$SERVER_PID"
+    for _ in $(seq 1 25); do alive "$SERVER_PID" || break; sleep 0.2; done
+    alive "$SERVER_PID" && kill -9 "$SERVER_PID"
+  fi
+  # Snapshot the db into the evidence before deleting scratch, so mutations stay provable.
+  [[ -f "$DIR/pood.db" ]] && sqlite3 "$DIR/pood.db" ".backup '$EVID/pood.db'"
+  rm -rf "$DIR"
+  echo "cleaned up run $RUN; evidence kept at $EVID"
+  ls "$EVID"
+}
+
+case "${1:-}" in
+  launch | doctor | clip | silence | speak | listen | api | db | cleanup) c="$1"; shift; "cmd_$c" "$@" ;;
+  *) sed -n '2,15p' "$0"; exit 2 ;;
+esac
