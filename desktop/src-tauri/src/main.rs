@@ -20,7 +20,7 @@ use std::{
 };
 use tauri::{
     image::Image,
-    menu::{CheckMenuItem, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
+    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{TrayIcon, TrayIconBuilder},
     AppHandle, Manager, RunEvent,
 };
@@ -44,19 +44,20 @@ static ASKED_ACCESSIBILITY: AtomicBool = AtomicBool::new(false);
 /// The tray's moving parts, shared between the socket callbacks and the menu handler.
 #[derive(Clone)]
 struct Ui {
+    app: AppHandle,
     tray: TrayIcon,
     status: MenuItem<tauri::Wry>,
-    recent: Vec<MenuItem<tauri::Wry>>,
+    recent_menu: Submenu<tauri::Wry>,
     conn: Arc<Mutex<Conn>>,
     history: Arc<Mutex<History>>,
+    /// The live pause state. `config.json` only persists it, so an unreadable file can't un-pause the machine.
+    paused: Arc<AtomicBool>,
+    /// Serializes rebuilds of the recent submenu so two transcripts can't interleave their edits.
+    recent_render: Arc<Mutex<()>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
-}
-
-fn is_paused(config_path: &PathBuf) -> bool {
-    Config::load(config_path).map(|c| c.paused).unwrap_or(false)
 }
 
 fn main() {
@@ -77,11 +78,7 @@ fn main() {
             let mode_copy = CheckMenuItem::with_id(app, "mode-copy", "Copy", true, mode == Mode::Copy, None::<&str>)?;
             let mode_paste = CheckMenuItem::with_id(app, "mode-paste", "Copy + paste", true, mode == Mode::Paste, None::<&str>)?;
             let pause = CheckMenuItem::with_id(app, "pause", "Pause receiving", true, paused, None::<&str>)?;
-            let recent = (0..history::CAPACITY)
-                .map(|n| MenuItem::with_id(app, format!("recent-{n}"), "", false, None::<&str>))
-                .collect::<Result<Vec<_>, _>>()?;
-            let recent_items: Vec<&dyn IsMenuItem<tauri::Wry>> = recent.iter().map(|i| i as _).collect();
-            let recent_menu = Submenu::with_id_and_items(app, "recent", "Recent transcripts", true, &recent_items)?;
+            let recent_menu = Submenu::with_id_and_items(app, "recent", "Recent transcripts", true, &[&empty_recent(app)?])?;
             let menu = Menu::with_items(
                 app,
                 &[
@@ -107,12 +104,16 @@ fn main() {
                 .show_menu_on_left_click(true)
                 .build(app)?;
             let ui = Ui {
+                app: handle.clone(),
                 tray: tray.clone(),
                 status,
-                recent,
+                recent_menu,
                 conn: Arc::new(Mutex::new(Conn::Connecting)),
                 history: Arc::new(Mutex::new(History::default())),
+                paused: Arc::new(AtomicBool::new(paused)),
+                recent_render: Arc::new(Mutex::new(())),
             };
+            ui.show_state();
 
             tray.on_menu_event({
                 let reconnect = reconnect.clone();
@@ -131,12 +132,12 @@ fn main() {
                         }
                     }
                     "pause" => {
-                        let paused = !is_paused(&config_path);
+                        let paused = !ui.paused.fetch_xor(true, Ordering::SeqCst);
                         if let Err(e) = Config::set_paused(&config_path, paused) {
                             eprintln!("pood: could not save pause state: {e}");
                         }
                         let _ = pause.set_checked(paused);
-                        ui.show_state(paused);
+                        ui.show_state();
                     }
                     id if id.starts_with("recent-") => {
                         let text = id["recent-".len()..]
@@ -157,14 +158,13 @@ fn main() {
             });
 
             let load_path = config_path.clone();
-            let conn_path = config_path.clone();
             let conn_ui = ui.clone();
             tauri::async_runtime::spawn(socket::run(
                 move || Config::load(&load_path),
                 reconnect,
                 move |conn| {
                     *lock(&conn_ui.conn) = conn;
-                    conn_ui.show_state(is_paused(&conn_path));
+                    conn_ui.show_state();
                 },
                 move |text, device, fresh| deliver(&handle, &ui, &config_path, &text, &device, fresh),
             ));
@@ -181,8 +181,9 @@ fn main() {
 }
 
 impl Ui {
-    /// Redraws the icon, tooltip and status line from the last connection state.
-    fn show_state(&self, paused: bool) {
+    /// Redraws the icon, tooltip and status line from the last connection state and the pause state.
+    fn show_state(&self) {
+        let paused = self.paused.load(Ordering::SeqCst);
         let conn = lock(&self.conn).clone();
         let (icon, text) = match &conn {
             Conn::Connecting => (ICON_CONNECTING, "Connecting…".to_string()),
@@ -199,34 +200,39 @@ impl Ui {
         let _ = self.status.set_text(text);
     }
 
-    /// Fills the "Recent transcripts" menu items, newest first; unused slots stay disabled.
+    /// Rebuilds the "Recent transcripts" submenu, newest first. The history lock is released before any menu call,
+    /// because those wait on the main thread, which may itself be waiting for that lock (a click on a recent item).
     fn show_history(&self) {
-        let history = lock(&self.history);
-        let recent = history.recent();
-        for (n, item) in self.recent.iter().enumerate() {
-            match recent.get(n) {
-                Some(text) => {
-                    let _ = item.set_text(history::label(text));
-                    let _ = item.set_enabled(true);
-                }
-                None => {
-                    let _ = item.set_text(if n == 0 { "No transcripts yet" } else { "" });
-                    let _ = item.set_enabled(false);
-                }
+        let _render = lock(&self.recent_render);
+        let recent = lock(&self.history).recent().to_vec();
+        for old in self.recent_menu.items().unwrap_or_default() {
+            let _ = self.recent_menu.remove(&old);
+        }
+        if recent.is_empty() {
+            if let Ok(item) = empty_recent(&self.app) {
+                let _ = self.recent_menu.append(&item);
+            }
+        }
+        for (n, text) in recent.iter().enumerate() {
+            if let Ok(item) = MenuItem::with_id(&self.app, format!("recent-{n}"), history::label(text), true, None::<&str>) {
+                let _ = self.recent_menu.append(&item);
             }
         }
     }
+}
+
+fn empty_recent(app: &impl Manager<tauri::Wry>) -> tauri::Result<MenuItem<tauri::Wry>> {
+    MenuItem::with_id(app, "recent-none", "No transcripts yet", false, None::<&str>)
 }
 
 /// Copies a transcript to the clipboard and shows a notification with its start. In paste mode, a fresh transcript is
 /// then pasted into the focused app; if that isn't possible it stays copied and the notification says why.
 /// While paused the transcript is ignored entirely: not copied, not announced, not kept in the recent list.
 fn deliver(app: &AppHandle, ui: &Ui, config_path: &PathBuf, text: &str, device: &str, fresh: bool) {
-    let config = Config::load(config_path);
-    if config.as_ref().map(|c| c.paused).unwrap_or(false) {
+    if ui.paused.load(Ordering::SeqCst) {
         return;
     }
-    let mode = config.map(|c| c.mode).unwrap_or_default();
+    let mode = Config::load(config_path).map(|c| c.mode).unwrap_or_default();
     lock(&ui.history).push(text.to_string());
     ui.show_history();
     let copied = arboard::Clipboard::new().and_then(|mut c| c.set_text(text));

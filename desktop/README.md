@@ -46,7 +46,7 @@ menu bar (**Open config.json…**), then choose **Reconnect**:
 
 **Pause receiving** in the menu bar makes this machine ignore incoming transcripts: nothing is copied, pasted or
 announced, and the status line reads "Paused · …". The choice is saved as `"paused"` in `config.json`, so it survives a
-restart. Other desktops keep receiving.
+restart (editing it by hand takes effect on the next launch). Other desktops keep receiving.
 
 **Recent transcripts** lists the last 5 received here, newest first and shortened to one line. Click one to copy it.
 The list lives in memory and starts empty after a restart; transcripts that arrive while paused are not added to it.
