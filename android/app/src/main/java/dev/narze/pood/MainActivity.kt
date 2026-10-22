@@ -108,15 +108,22 @@ private fun MainScreen() {
             }
             .onFailure { say("History: ${it.message}") }
     }
+    fun autoStartBubble() {
+        if (settings.bubbleEnabled && settings.serverUrl.isNotBlank() && perms.all && !running) PoodService.start(context)
+    }
     fun testConnection() = scope.launch {
         settings.serverUrl = url
         me = runCatching { api().me() }.fold({ "Connected as ${it.user} · ${it.model}" }, { "Failed: ${it.message}" })
-        if (me!!.startsWith("Connected")) loadHistory(reset = true)
+        if (me!!.startsWith("Connected")) {
+            loadHistory(reset = true)
+            autoStartBubble()
+        }
     }
 
     LifecycleResumeEffect(Unit) {
         perms = context.perms()
         if (settings.serverUrl.isNotBlank()) loadHistory(reset = true)
+        autoStartBubble()
         onPauseOrDispose {}
     }
 
@@ -166,10 +173,10 @@ private fun MainScreen() {
                 Section("Bubble") {
                     ToggleRow("Show bubble", running) { on ->
                         when {
-                            !on -> PoodService.stop(context)
+                            !on -> { settings.bubbleEnabled = false; PoodService.stop(context) }
                             settings.serverUrl.isBlank() -> say("Set the gateway URL first")
                             !perms.all -> say("Grant all permissions first")
-                            else -> PoodService.start(context)
+                            else -> { settings.bubbleEnabled = true; PoodService.start(context) }
                         }
                     }
                     ToggleRow("Copy transcript automatically", autoCopy) { autoCopy = it; settings.autoCopy = it }
