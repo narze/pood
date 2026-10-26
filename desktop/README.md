@@ -42,11 +42,22 @@ menu bar (**Open config.json…**), then choose **Reconnect**:
 | Outline person speaking | Connecting |
 | Struck-through person speaking | Disconnected; the menu shows why |
 
+## Pause and recent transcripts
+
+**Pause receiving** in the menu bar makes this machine ignore incoming transcripts: nothing is copied, pasted or
+announced, and the status line reads "Paused · …". The choice is saved as `"paused"` in `config.json`, so it survives a
+restart (editing it by hand takes effect on the next launch). Other desktops keep receiving.
+
+**Recent transcripts** lists the last 5 received here, newest first and shortened to one line. Click one to copy it.
+The list lives in memory and starts empty after a restart; transcripts that arrive while paused are not added to it.
+
 ## Paste mode
 
-Choose **Copy + paste** in the menu bar. Every transcript is still copied; a *fresh* one is then pasted into the focused
-app with Cmd+V. A transcript is fresh when the gateway broadcasts it within 10 s of you stopping speaking, so anything
-that arrives late, or is re-sent from history, is copied but never pasted.
+Choose **Paste** in the menu bar. A *fresh* transcript is pasted into the focused app with Cmd+V, and the clipboard is
+then put back the way it was (text or an image). If you copy something else before that happens, your copy is kept. A
+transcript is fresh when the gateway sends it within 10 s of you stopping speaking, or when you swipe it to this
+machine from the phone. Anything else, such as a transcript that arrives late, is only copied and never pasted. A
+transcript that can't be pasted (for example, without Accessibility access) also stays on the clipboard.
 
 On macOS, pasting needs Accessibility permission. If it is missing, the app says so, offers to open the right Settings
 pane, and keeps copying meanwhile. Grant it under **Privacy & Security → Accessibility**. Because the app is unsigned,

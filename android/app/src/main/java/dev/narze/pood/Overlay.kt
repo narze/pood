@@ -59,10 +59,12 @@ fun OverlayContent(
     onCollapse: () -> Unit,
     onToggle: () -> Unit,
     onCopy: (String) -> Unit,
+    onBeam: (Long) -> Unit,
+    swipeZones: SwipeZones,
 ) {
     val s by state.collectAsStateWithLifecycle()
     PoodTheme {
-        if (s.expanded) Panel(s, onCollapse, onToggle, onCopy) else Bubble(s, onExpand)
+        if (s.expanded) Panel(s, onCollapse, onToggle, onCopy, onBeam, swipeZones) else Bubble(s, onExpand)
     }
 }
 
@@ -112,7 +114,14 @@ private fun Bubble(s: UiState, onExpand: () -> Unit) {
 }
 
 @Composable
-private fun Panel(s: UiState, onCollapse: () -> Unit, onToggle: () -> Unit, onCopy: (String) -> Unit) {
+private fun Panel(
+    s: UiState,
+    onCollapse: () -> Unit,
+    onToggle: () -> Unit,
+    onCopy: (String) -> Unit,
+    onBeam: (Long) -> Unit,
+    zones: SwipeZones,
+) {
     Surface(
         Modifier.width(PoodService.PANEL_DP.dp).padding(4.dp),
         shape = RoundedCornerShape(20.dp),
@@ -129,9 +138,15 @@ private fun Panel(s: UiState, onCollapse: () -> Unit, onToggle: () -> Unit, onCo
                 TextButton(onClick = onCollapse) { Text("Hide") }
             }
 
-            Transcript(s)
-            if (s.phase == Phase.Idle && s.delivered.isNotEmpty()) Text(
-                "→ ${s.delivered.distinct().joinToString(", ")} ✓",
+            val id = s.textId
+            BeamSwipe(
+                onBeam = { id?.let(onBeam) },
+                enabled = s.phase == Phase.Idle && id != null,
+                modifier = if (s.phase == Phase.Idle && id != null) Modifier.swipeZone(zones, "current") else Modifier,
+            ) { Transcript(s) }
+            val note = s.beamNote ?: s.delivered.distinct().takeIf { it.isNotEmpty() }?.let { "→ ${it.joinToString(", ")} ✓" }
+            if (s.phase == Phase.Idle && note != null) Text(
+                note,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -157,15 +172,17 @@ private fun Panel(s: UiState, onCollapse: () -> Unit, onToggle: () -> Unit, onCo
 
             if (s.recent.isNotEmpty()) {
                 HorizontalDivider()
-                Text("Recent · tap to copy", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Recent · tap to copy, swipe right to beam", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 s.recent.forEach { t ->
-                    Text(
-                        t.text,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.fillMaxWidth().clickable { onCopy(t.text) }.padding(vertical = 6.dp),
-                    )
+                    BeamSwipe(onBeam = { onBeam(t.id) }, modifier = Modifier.swipeZone(zones, "recent-${t.id}")) {
+                        Text(
+                            t.text,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.fillMaxWidth().clickable { onCopy(t.text) }.padding(vertical = 6.dp),
+                        )
+                    }
                 }
             }
         }

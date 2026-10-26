@@ -107,7 +107,7 @@ class PoodSocket(private val url: String, private val scope: CoroutineScope) {
                     if (m.isNull("id")) null else m.getLong("id"),
                     m.getString("text"),
                     m.optLong("latencyMs"),
-                    m.optJSONArray("delivered")?.let { a -> List(a.length()) { a.getString(it) } } ?: emptyList(),
+                    m.optJSONArray("delivered")?.strings() ?: emptyList(),
                 )
                 "error" -> ServerEvent.Error(
                     if (m.has("utteranceId")) m.getString("utteranceId") else null,
