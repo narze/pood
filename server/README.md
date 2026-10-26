@@ -38,6 +38,17 @@ noise, and changing the prompt doesn't stop it.
    ```
 3. Check it from any device on the tailnet: `curl https://<server>.<tailnet>.ts.net:8790/v1/me`.
 
+**Without sudo** (a systemd user service; needs `loginctl enable-linger` for your user, and `tailscale set
+--operator=$USER` so you can run `tailscale serve`):
+```sh
+scp dist/linux-x64/pood-server server:.local/bin/
+scp deploy/pood.user.service server:.config/systemd/user/pood.service
+# on the server: put the config in ~/.config/pood/pood.toml (dbPath under ~/.local/share/pood) and secrets in ~/.config/pood/env
+systemctl --user daemon-reload && systemctl --user enable --now pood && journalctl --user -u pood -f
+tailscale serve --bg --https=8790 http://127.0.0.1:8790
+```
+To update, copy the new binary over and run `systemctl --user restart pood`.
+
 Notes:
 - **Where things live.** History is stored in `/var/lib/pood/pood.db`. The service runs as a sandboxed dynamic user.
 - **Updating.** Rebuild, copy the new `pood-server` binary over, and run `sudo ./install.sh` again. The script doesn't

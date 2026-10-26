@@ -15,6 +15,16 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("autoCopy", true)
         set(value) = prefs.edit { putBoolean("autoCopy", value) }
 
+    /** Send every final transcript to [beamTargets] as soon as it arrives. Swiping a transcript beams it either way. */
+    var autoBeam: Boolean
+        get() = prefs.getBoolean("autoBeam", true)
+        set(value) = prefs.edit { putBoolean("autoBeam", value) }
+
+    /** Names of the desktops that receive beamed transcripts. Empty means none: nothing is sent anywhere. */
+    var beamTargets: Set<String>
+        get() = prefs.getStringSet("beamTargets", emptySet())!!.toSet()
+        set(value) = prefs.edit { putStringSet("beamTargets", value) }
+
     var bubbleX: Int
         get() = prefs.getInt("bubbleX", -1)
         set(value) = prefs.edit { putInt("bubbleX", value) }

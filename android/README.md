@@ -35,6 +35,15 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 
 The window also shows the 3 most recent transcripts; tap one to copy it again. The full history is on the main screen.
 
+## Sending to desktops
+
+Under **Desktops** on the main screen, tick the computers that should receive transcripts. The list shows the desktops
+that are online now, plus any you ticked before. Nothing is sent until at least one is ticked.
+
+- **Send each transcript automatically** sends every final transcript to the ticked desktops. It is on by default.
+- **Swipe right** on a transcript to beam it to the ticked desktops now. This works on the current transcript, on the
+  recent ones in the window, and on history items. A desktop in paste mode pastes it.
+
 The persistent notification has two actions:
 - **Record / stop**: records without opening the bubble. Useful in apps that hide overlays.
 - **Quit**: turns the bubble off.

@@ -1,0 +1,15 @@
+[Unit]
+Description=Pood speech-to-text gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/pood-server
+Environment=POOD_CONFIG=%h/.config/pood/pood.toml
+EnvironmentFile=%h/.config/pood/env
+WorkingDirectory=%h/.local/share/pood
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

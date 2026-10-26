@@ -33,6 +33,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 import kotlin.math.hypot
@@ -45,8 +46,12 @@ data class UiState(
     val partial: String = "",
     val stash: String = "",
     val text: String = "",
+    /** History id of [text]; null when nothing was saved. */
+    val textId: Long? = null,
     val copied: Boolean = false,
     val delivered: List<String> = emptyList(),
+    /** Outcome of the last swipe-to-beam, shown under the transcript. */
+    val beamNote: String? = null,
     val error: String? = null,
     val level: Float = 0f,
     val recent: List<Transcript> = emptyList(),
@@ -69,6 +74,7 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
     private lateinit var windowManager: WindowManager
     private var overlay: OverlayFrame? = null
     private var dismissTarget: ComposeView? = null
+    private val swipeZones = SwipeZones()
     // Where the finger has dragged the window to; differs from params while the bubble is snapped onto the dismiss target.
     private var dragX = 0f
     private var dragY = 0f
@@ -143,7 +149,8 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
         }
         val id = UUID.randomUUID().toString()
         utteranceId = id
-        socket.send(JSONObject().put("type", "start").put("utteranceId", id))
+        val targets = if (settings.autoBeam) settings.beamTargets else emptySet()
+        socket.send(JSONObject().put("type", "start").put("utteranceId", id).put("targets", JSONArray(targets)))
         try {
             capture.start()
         } catch (e: Exception) {
@@ -152,7 +159,7 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
             _state.update { it.copy(error = e.message) }
             return
         }
-        _state.update { it.copy(phase = Phase.Recording, partial = "", stash = "", text = "", copied = false, delivered = emptyList(), error = null) }
+        _state.update { it.copy(phase = Phase.Recording, partial = "", stash = "", text = "", textId = null, copied = false, delivered = emptyList(), beamNote = null, error = null) }
     }
 
     private fun stopRecording() {
@@ -182,6 +189,7 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
                     s.copy(
                         phase = Phase.Idle,
                         text = event.text,
+                        textId = event.id,
                         copied = copied,
                         delivered = event.delivered,
                         error = if (event.text.isEmpty()) "Didn't catch that" else null,
@@ -200,6 +208,22 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
                 event.utteranceId == utteranceId -> abort(event.message)
                 else -> _state.update { it.copy(error = event.message) }
             }
+        }
+    }
+
+    /** Sends a saved transcript to the chosen desktops (fresh, so ones in paste mode paste it). */
+    private fun beam(id: Long) {
+        val targets = settings.beamTargets
+        if (targets.isEmpty()) {
+            _state.update { it.copy(beamNote = "Choose desktops in Pood first") }
+            return
+        }
+        lifecycleScope.launch {
+            val note = runCatching { api.beam(id, targets) }.fold(
+                { delivered -> if (delivered.isEmpty()) "No chosen desktop is online" else "Beamed → ${delivered.distinct().joinToString(", ")} ✓" },
+                { "Beam failed: ${it.message}" },
+            )
+            _state.update { it.copy(beamNote = note) }
         }
     }
 
@@ -223,10 +247,18 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
                     onCollapse = { setExpanded(false) },
                     onToggle = ::toggle,
                     onCopy = { text -> if (copy(text)) _state.update { it.copy(copied = it.text == text) } },
+                    onBeam = ::beam,
+                    swipeZones = swipeZones,
                 )
             }
         }
-        val frame = OverlayFrame(this, onDragStart = ::dragStarted, onDrag = ::moveBy, onDragEnd = ::dragEnded).apply {
+        val frame = OverlayFrame(
+            this,
+            onDragStart = ::dragStarted,
+            onDrag = ::moveBy,
+            onDragEnd = ::dragEnded,
+            canSwipe = { x, y -> _state.value.expanded && swipeZones.contains(x, y) },
+        ).apply {
             addView(compose)
             setViewTreeLifecycleOwner(this@PoodService)
             setViewTreeSavedStateRegistryOwner(this@PoodService)

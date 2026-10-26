@@ -254,3 +254,55 @@ test("desktop channel requires auth", async () => {
   const { base } = setup();
   expect((await fetch(`${base}/v1/desktop`)).status).toBe(401);
 });
+
+test("start targets only the named desktops", async () => {
+  const { base, ws: url } = setup();
+  const mac = await desktop(base, "MacBook");
+  const pc = await desktop(base, "Desktop-PC");
+  const c = await connect(url);
+  c.json({ type: "start", utteranceId: "u1", targets: ["MacBook", "Gone"] });
+  c.ws.send(audio(400));
+  c.json({ type: "stop", utteranceId: "u1" });
+  expect(await c.next("final")).toMatchObject({ delivered: ["MacBook"] });
+
+  c.json({ type: "start", utteranceId: "u2", targets: [] });
+  c.ws.send(audio(400));
+  c.json({ type: "stop", utteranceId: "u2" });
+  expect(await c.next("final")).toMatchObject({ text: "สวัสดี hello", delivered: [] });
+
+  c.json({ type: "start", utteranceId: "u3", targets: "MacBook" });
+  expect(await c.next("error")).toMatchObject({ utteranceId: "u3", code: "bad_request" });
+
+  await Bun.sleep(50);
+  expect(mac.got).toHaveLength(1);
+  expect(pc.got).toEqual([]);
+});
+
+test("lists online desktops of the caller", async () => {
+  const { base } = setup();
+  await desktop(base, "MacBook");
+  await desktop(base, "MacBook");
+  await desktop(base, "Desktop-PC");
+  await desktop(base, "Theirs", { Authorization: "Bearer secret" });
+  const res = await fetch(`${base}/v1/desktops`, { headers: { "Tailscale-User-Login": "me@github" } });
+  expect(await res.json()).toEqual({ desktops: ["Desktop-PC", "MacBook"] });
+});
+
+test("beams a history item, fresh, to the chosen desktops", async () => {
+  const { base, history } = setup();
+  const saved = history.add({ user: "me@github", device: "pixel", text: "beam me", asrText: "", model: "m", durationMs: 1, latencyMs: 1 });
+  const mac = await desktop(base, "MacBook");
+  const pc = await desktop(base, "Desktop-PC");
+  const post = (body: unknown, user = "me@github") =>
+    fetch(`${base}/v1/beam`, { method: "POST", headers: { "Tailscale-User-Login": user, "Content-Type": "application/json" }, body: JSON.stringify(body) });
+
+  const res = await post({ id: saved.id, targets: ["Desktop-PC"] });
+  expect(await res.json()).toEqual({ delivered: ["Desktop-PC"] });
+  await Bun.sleep(50);
+  expect(pc.got).toEqual([{ type: "transcript", id: saved.id, text: "beam me", device: "pixel", createdAt: saved.createdAt, fresh: true }]);
+  expect(mac.got).toEqual([]);
+
+  expect((await post({ id: saved.id + 1 })).status).toBe(404);
+  expect((await post({ id: "x" })).status).toBe(400);
+  expect((await fetch(`${base}/v1/beam`, { method: "POST", headers: { Authorization: "Bearer secret" }, body: JSON.stringify({ id: saved.id }) })).status).toBe(404); // someone else's
+});

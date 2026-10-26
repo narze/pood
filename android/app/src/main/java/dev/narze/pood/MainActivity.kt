@@ -31,6 +31,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
@@ -95,6 +96,9 @@ private fun MainScreen() {
     var autoCopy by remember { mutableStateOf(settings.autoCopy) }
     var perms by remember { mutableStateOf(context.perms()) }
     val history = remember { mutableStateListOf<Transcript>() }
+    var autoBeam by remember { mutableStateOf(settings.autoBeam) }
+    var beamTargets by remember { mutableStateOf(settings.beamTargets) }
+    var online by remember { mutableStateOf<List<String>?>(null) }
     var hasMore by remember { mutableStateOf(false) }
 
     fun api() = PoodApi(settings.serverUrl)
@@ -108,15 +112,33 @@ private fun MainScreen() {
             }
             .onFailure { say("History: ${it.message}") }
     }
+    fun loadDesktops() = scope.launch {
+        online = runCatching { api().desktops() }.getOrElse { say("Desktops: ${it.message}"); null }
+    }
+    fun beam(t: Transcript) = scope.launch {
+        if (beamTargets.isEmpty()) {
+            snackbar.showSnackbar("Choose desktops to beam to first")
+            return@launch
+        }
+        runCatching { api().beam(t.id, beamTargets) }
+            .onSuccess { say(if (it.isEmpty()) "No chosen desktop is online" else "Beamed → ${it.distinct().joinToString(", ")}") }
+            .onFailure { say("Beam: ${it.message}") }
+    }
     fun testConnection() = scope.launch {
         settings.serverUrl = url
         me = runCatching { api().me() }.fold({ "Connected as ${it.user} · ${it.model}" }, { "Failed: ${it.message}" })
-        if (me!!.startsWith("Connected")) loadHistory(reset = true)
+        if (me!!.startsWith("Connected")) {
+            loadHistory(reset = true)
+            loadDesktops()
+        }
     }
 
     LifecycleResumeEffect(Unit) {
         perms = context.perms()
-        if (settings.serverUrl.isNotBlank()) loadHistory(reset = true)
+        if (settings.serverUrl.isNotBlank()) {
+            loadHistory(reset = true)
+            loadDesktops()
+        }
         onPauseOrDispose {}
     }
 
@@ -176,24 +198,51 @@ private fun MainScreen() {
                 }
             }
             item {
+                Section("Desktops") {
+                    ToggleRow("Send each transcript automatically", autoBeam) { autoBeam = it; settings.autoBeam = it }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "Beam to these desktops. Swipe a transcript right to beam it again.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f),
+                        )
+                        TextButton(onClick = { loadDesktops() }) { Text("Refresh") }
+                    }
+                    val names = ((online ?: emptyList()) + beamTargets).distinct().sorted()
+                    if (names.isEmpty()) Text(
+                        "No desktop is online. Start Pood on a computer, then Refresh.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    names.forEach { name ->
+                        DesktopRow(name, online = online?.contains(name), checked = name in beamTargets) { on ->
+                            beamTargets = if (on) beamTargets + name else beamTargets - name
+                            settings.beamTargets = beamTargets
+                        }
+                    }
+                }
+            }
+            item {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text("History", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
                     TextButton(onClick = { loadHistory(reset = true) }) { Text("Refresh") }
                 }
             }
             items(history, key = { it.id }) { t ->
-                HistoryItem(
-                    t,
-                    onCopy = {
-                        context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Pood", t.text))
-                        if (Build.VERSION.SDK_INT < 33) say("Copied")
-                    },
-                    onDelete = {
-                        scope.launch {
-                            runCatching { api().delete(t.id) }.onSuccess { history.remove(t) }.onFailure { say("Delete: ${it.message}") }
-                        }
-                    },
-                )
+                BeamSwipe(onBeam = { beam(t) }) {
+                    HistoryItem(
+                        t,
+                        onCopy = {
+                            context.getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText("Pood", t.text))
+                            if (Build.VERSION.SDK_INT < 33) say("Copied")
+                        },
+                        onDelete = {
+                            scope.launch {
+                                runCatching { api().delete(t.id) }.onSuccess { history.remove(t) }.onFailure { say("Delete: ${it.message}") }
+                            }
+                        },
+                    )
+                }
             }
             if (hasMore) item { OutlinedButton(onClick = { loadHistory(reset = false) }, Modifier.fillMaxWidth()) { Text("Load more") } }
             if (history.isEmpty()) item { Text("No transcripts yet.", color = MaterialTheme.colorScheme.onSurfaceVariant) }
@@ -225,6 +274,20 @@ private fun ToggleRow(label: String, checked: Boolean, onChange: (Boolean) -> Un
     Row(verticalAlignment = Alignment.CenterVertically) {
         Text(label, Modifier.weight(1f))
         Switch(checked = checked, onCheckedChange = onChange)
+    }
+}
+
+/** A desktop the user can beam to; [online] is null while unknown (the list could not be loaded). */
+@Composable
+private fun DesktopRow(name: String, online: Boolean?, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable { onChange(!checked) }, verticalAlignment = Alignment.CenterVertically) {
+        Checkbox(checked = checked, onCheckedChange = onChange)
+        Text(name, Modifier.weight(1f))
+        when (online) {
+            true -> Text("online", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+            false -> Text("offline", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            null -> Unit
+        }
     }
 }
 

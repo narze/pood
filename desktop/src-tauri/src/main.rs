@@ -38,6 +38,9 @@ const PREVIEW_CHARS: usize = 80;
 /// Gives the clipboard a moment to settle before the paste shortcut is sent.
 const PASTE_DELAY: Duration = Duration::from_millis(60);
 
+/// Gives the focused app time to read the clipboard after Cmd+V before the previous contents are put back.
+const RESTORE_DELAY: Duration = Duration::from_millis(300);
+
 /// Set once the user has been asked about Accessibility access, so a stream of transcripts doesn't nag.
 static ASKED_ACCESSIBILITY: AtomicBool = AtomicBool::new(false);
 
@@ -76,7 +79,7 @@ fn main() {
             let paused = loaded.as_ref().map(|c| c.paused).unwrap_or(false);
             let status = MenuItem::with_id(app, "status", "Starting…", false, None::<&str>)?;
             let mode_copy = CheckMenuItem::with_id(app, "mode-copy", "Copy", true, mode == Mode::Copy, None::<&str>)?;
-            let mode_paste = CheckMenuItem::with_id(app, "mode-paste", "Copy + paste", true, mode == Mode::Paste, None::<&str>)?;
+            let mode_paste = CheckMenuItem::with_id(app, "mode-paste", "Paste", true, mode == Mode::Paste, None::<&str>)?;
             let pause = CheckMenuItem::with_id(app, "pause", "Pause receiving", true, paused, None::<&str>)?;
             let recent_menu = Submenu::with_id_and_items(app, "recent", "Recent transcripts", true, &[&empty_recent(app)?])?;
             let menu = Menu::with_items(
@@ -226,7 +229,8 @@ fn empty_recent(app: &impl Manager<tauri::Wry>) -> tauri::Result<MenuItem<tauri:
 }
 
 /// Copies a transcript to the clipboard and shows a notification with its start. In paste mode, a fresh transcript is
-/// then pasted into the focused app; if that isn't possible it stays copied and the notification says why.
+/// instead pasted into the focused app and the clipboard is then put back as it was; if pasting isn't possible the
+/// transcript stays copied and the notification says why.
 /// While paused the transcript is ignored entirely: not copied, not announced, not kept in the recent list.
 fn deliver(app: &AppHandle, ui: &Ui, config_path: &PathBuf, text: &str, device: &str, fresh: bool) {
     if ui.paused.load(Ordering::SeqCst) {
@@ -235,34 +239,51 @@ fn deliver(app: &AppHandle, ui: &Ui, config_path: &PathBuf, text: &str, device: 
     let mode = Config::load(config_path).map(|c| c.mode).unwrap_or_default();
     lock(&ui.history).push(text.to_string());
     ui.show_history();
-    let copied = arboard::Clipboard::new().and_then(|mut c| c.set_text(text));
+    let wants_paste = paste::should_paste(mode, fresh);
+    let can_paste = wants_paste && paste::can_paste();
+    // The previous contents are only worth keeping when the transcript is about to be pasted rather than left copied.
+    let copied = arboard::Clipboard::new().and_then(|mut c| {
+        let previous = can_paste.then(|| paste::Snapshot::take(&mut c));
+        c.set_text(text).map(|()| previous)
+    });
     let mut preview: String = text.chars().take(PREVIEW_CHARS).collect();
     if text.chars().count() > PREVIEW_CHARS {
         preview.push('…');
     }
-    let wants_paste = copied.is_ok() && paste::should_paste(mode, fresh);
-    let can_paste = wants_paste && paste::can_paste();
     let title = match &copied {
         Err(e) => format!("From {device} (copy failed: {e})"),
-        Ok(()) if wants_paste && !can_paste => format!("Copied from {device} (paste needs Accessibility access)"),
-        Ok(()) if can_paste => format!("Pasted from {device}"),
-        Ok(()) => format!("Copied from {device}"),
+        Ok(_) if wants_paste && !can_paste => format!("Copied from {device} (paste needs Accessibility access)"),
+        Ok(_) if can_paste => format!("Pasted from {device}"),
+        Ok(_) => format!("Copied from {device}"),
     };
     let _ = app.notification().builder().title(title).body(preview).show();
 
-    if wants_paste && !can_paste {
-        ensure_paste_permission(app);
-    } else if can_paste {
-        let app = app.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(PASTE_DELAY);
-            // Synthesizing key events must happen on the main thread on macOS.
-            let _ = app.run_on_main_thread(|| {
-                if let Err(e) = paste::press_paste() {
-                    eprintln!("pood: paste failed: {e}");
+    match copied {
+        Ok(_) if wants_paste && !can_paste => ensure_paste_permission(app),
+        Ok(Some(previous)) => {
+            let app = app.clone();
+            let text = text.to_string();
+            std::thread::spawn(move || {
+                std::thread::sleep(PASTE_DELAY);
+                // Synthesizing key events must happen on the main thread on macOS.
+                let (done, pasted) = std::sync::mpsc::channel();
+                let _ = app.run_on_main_thread(move || {
+                    let _ = done.send(paste::press_paste());
+                });
+                match pasted.recv() {
+                    Ok(Ok(())) => {
+                        std::thread::sleep(RESTORE_DELAY);
+                        if let Err(e) = previous.restore(&text) {
+                            eprintln!("pood: could not restore the clipboard: {e}");
+                        }
+                    }
+                    // Not pasted, so leave the transcript on the clipboard for the user to paste by hand.
+                    Ok(Err(e)) => eprintln!("pood: paste failed: {e}"),
+                    Err(_) => eprintln!("pood: paste was never run"),
                 }
             });
-        });
+        }
+        _ => {}
     }
 }
 

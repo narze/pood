@@ -20,6 +20,8 @@ interface Utterance {
   /** Raw audio, kept only when POOD_DUMP_AUDIO is set (debugging). */
   dump?: Buffer[];
   stoppedAt?: number;
+  /** Desktop names to send the final to; `undefined` means every desktop (clients that predate targeting). */
+  targets?: string[];
 }
 
 interface Conn {
@@ -31,6 +33,8 @@ interface Conn {
 }
 
 type Socket = ServerWebSocket<Conn>;
+
+const isNameList = (v: unknown): v is string[] => Array.isArray(v) && v.every((n) => typeof n === "string");
 
 export interface Deps {
   config: Pick<Config, "hostname" | "port" | "auth" | "maxUtteranceSeconds">;
@@ -46,16 +50,16 @@ export function createServer({ config, provider, history, freshMs = FRESH_MS, lo
   const maxBytes = config.maxUtteranceSeconds * 1000 * BYTES_PER_MS;
   const desktops = new Map<string, Set<Socket>>(); // user → connected desktops
 
-  /** Sends a transcript to every connected desktop of its user; returns their names. */
-  function broadcast(user: string, t: Transcript, fresh: boolean): string[] {
-    const targets = [...(desktops.get(user) ?? [])];
+  /** Sends a transcript to the user's connected desktops named in `names` (all of them when omitted); returns their names. */
+  function broadcast(user: string, t: Transcript, fresh: boolean, names?: string[]): string[] {
+    const targets = [...(desktops.get(user) ?? [])].filter((d) => !names || names.includes(d.data.device));
     for (const d of targets) send(d, { type: "transcript", id: t.id, text: t.text, device: t.device, createdAt: t.createdAt, fresh });
     return targets.map((d) => d.data.device);
   }
 
-  function start(ws: Socket, id: string) {
+  function start(ws: Socket, id: string, targets?: string[]) {
     if (ws.data.utterance) return send(ws, { type: "error", utteranceId: id, code: "busy", message: "an utterance is already active" });
-    const utterance: Utterance = { id, session: provider.open(), bytes: 0, voicedMs: 0, dump: process.env.POOD_DUMP_AUDIO ? [] : undefined };
+    const utterance: Utterance = { id, session: provider.open(), bytes: 0, voicedMs: 0, dump: process.env.POOD_DUMP_AUDIO ? [] : undefined, targets };
     ws.data.utterance = utterance;
     utterance.session.onPartial = (text, stash) => send(ws, { type: "partial", utteranceId: id, text, stash });
     utterance.session.result.then(
@@ -69,7 +73,7 @@ export function createServer({ config, provider, history, freshMs = FRESH_MS, lo
         const saved = text
           ? history.add({ user: ws.data.user, device: ws.data.device, text, asrText: result.asrText ?? "", model: provider.model, durationMs, latencyMs })
           : null;
-        const delivered = saved ? broadcast(ws.data.user, saved, sinceStop <= freshMs) : [];
+        const delivered = saved ? broadcast(ws.data.user, saved, sinceStop <= freshMs, utterance.targets) : [];
         log(`final ${ws.data.user} ${durationMs}ms audio, ${latencyMs}ms latency, delivered to ${delivered.length}`);
         send(ws, { type: "final", utteranceId: id, id: saved?.id ?? null, text, durationMs, latencyMs, delivered });
       },
@@ -129,7 +133,9 @@ export function createServer({ config, provider, history, freshMs = FRESH_MS, lo
     const current = ws.data.utterance;
     switch (msg.type) {
       case "start":
-        return start(ws, id);
+        if (msg.targets !== undefined && !isNameList(msg.targets))
+          return send(ws, { type: "error", utteranceId: id, code: "bad_request", message: "targets must be an array of desktop names" });
+        return start(ws, id, msg.targets);
       case "stop":
         if (current && current.id === id) return stop(ws, current);
         break;
@@ -140,6 +146,18 @@ export function createServer({ config, provider, history, freshMs = FRESH_MS, lo
         return send(ws, { type: "error", utteranceId: id, code: "bad_request", message: `unknown type ${msg.type}` });
     }
     send(ws, { type: "error", utteranceId: id, code: "bad_request", message: "no such active utterance" });
+  }
+
+  /** `POST /v1/beam {id, targets?}`: re-sends a history item to desktops. The user just asked for it, so it is fresh. */
+  async function beam(user: string, req: Request): Promise<Response> {
+    const body: any = await req.json().catch(() => null);
+    if (typeof body?.id !== "number" || (body.targets !== undefined && !isNameList(body.targets)))
+      return new Response("expected {id: number, targets?: string[]}", { status: 400 });
+    const t = history.get(user, body.id);
+    if (!t) return new Response("not found", { status: 404 });
+    const delivered = broadcast(user, t, true, body.targets);
+    log(`beam ${user} #${t.id} delivered to ${delivered.length}`);
+    return Response.json({ delivered });
   }
 
   return Bun.serve<Conn>({
@@ -163,6 +181,9 @@ export function createServer({ config, provider, history, freshMs = FRESH_MS, lo
         const limit = Math.min(Math.max(Number(url.searchParams.get("limit")) || 50, 1), 200);
         return Response.json({ items: history.list(user, { before, limit }) });
       }
+      if (url.pathname === "/v1/desktops" && req.method === "GET")
+        return Response.json({ desktops: [...new Set([...(desktops.get(user) ?? [])].map((d) => d.data.device))].sort() });
+      if (url.pathname === "/v1/beam" && req.method === "POST") return beam(user, req);
       const del = url.pathname.match(/^\/v1\/history\/(\d+)$/);
       if (del && req.method === "DELETE")
         return new Response(null, { status: history.delete(user, Number(del[1])) ? 204 : 404 });
