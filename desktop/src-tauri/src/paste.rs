@@ -1,5 +1,41 @@
 use crate::config::Mode;
+use arboard::{Clipboard, ImageData};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
+
+/// What was on the clipboard before a paste borrowed it, so it can be put back afterwards.
+pub enum Snapshot {
+    Empty,
+    Text(String),
+    Image(ImageData<'static>),
+}
+
+impl Snapshot {
+    /// Reads the clipboard as text, else as an image. Anything else (files, rich text only) is not kept.
+    pub fn take(clipboard: &mut Clipboard) -> Snapshot {
+        if let Ok(text) = clipboard.get_text() {
+            return Snapshot::Text(text);
+        }
+        match clipboard.get_image() {
+            Ok(image) => Snapshot::Image(image.to_owned_img()),
+            Err(_) => Snapshot::Empty,
+        }
+    }
+
+    /// Puts the snapshot back, unless the clipboard no longer holds `pasted`: then someone copied something since,
+    /// and that wins.
+    pub fn restore(self, pasted: &str) -> Result<(), String> {
+        let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
+        if clipboard.get_text().ok().as_deref() != Some(pasted) {
+            return Ok(());
+        }
+        match self {
+            Snapshot::Empty => clipboard.clear(),
+            Snapshot::Text(text) => clipboard.set_text(text),
+            Snapshot::Image(image) => clipboard.set_image(image),
+        }
+        .map_err(|e| e.to_string())
+    }
+}
 
 /// Only fresh transcripts are typed into the focused app; anything older would land somewhere the user no longer expects.
 pub fn should_paste(mode: Mode, fresh: bool) -> bool {
