@@ -112,6 +112,9 @@ private fun MainScreen() {
             }
             .onFailure { say("History: ${it.message}") }
     }
+    fun autoStartBubble() {
+        if (settings.bubbleEnabled && settings.serverUrl.isNotBlank() && perms.all && !running) PoodService.start(context)
+    }
     fun loadDesktops() = scope.launch {
         online = runCatching { api().desktops() }.getOrElse { say("Desktops: ${it.message}"); null }
     }
@@ -130,6 +133,7 @@ private fun MainScreen() {
         if (me!!.startsWith("Connected")) {
             loadHistory(reset = true)
             loadDesktops()
+            autoStartBubble()
         }
     }
 
@@ -139,6 +143,7 @@ private fun MainScreen() {
             loadHistory(reset = true)
             loadDesktops()
         }
+        autoStartBubble()
         onPauseOrDispose {}
     }
 
@@ -188,10 +193,10 @@ private fun MainScreen() {
                 Section("Bubble") {
                     ToggleRow("Show bubble", running) { on ->
                         when {
-                            !on -> PoodService.stop(context)
+                            !on -> { settings.bubbleEnabled = false; PoodService.stop(context) }
                             settings.serverUrl.isBlank() -> say("Set the gateway URL first")
                             !perms.all -> say("Grant all permissions first")
-                            else -> PoodService.start(context)
+                            else -> { settings.bubbleEnabled = true; PoodService.start(context) }
                         }
                     }
                     ToggleRow("Copy transcript automatically", autoCopy) { autoCopy = it; settings.autoCopy = it }

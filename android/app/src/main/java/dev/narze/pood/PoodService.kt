@@ -114,7 +114,10 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         super.onStartCommand(intent, flags, startId)
         when (intent?.action) {
-            ACTION_QUIT -> stopSelf()
+            ACTION_QUIT -> {
+                settings.bubbleEnabled = false
+                stopSelf()
+            }
             ACTION_TOGGLE -> toggle()
         }
         return START_NOT_STICKY // a restarted service would lack while-in-use mic access
@@ -363,6 +366,7 @@ class PoodService : LifecycleService(), SavedStateRegistryOwner {
         val dismissed = _state.value.overDismiss
         _state.update { it.copy(dragging = false, overDismiss = false) }
         if (dismissed) {
+            settings.bubbleEnabled = false
             stopSelf()
             return
         }

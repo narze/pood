@@ -15,6 +15,11 @@ class Settings(context: Context) {
         get() = prefs.getBoolean("autoCopy", true)
         set(value) = prefs.edit { putBoolean("autoCopy", value) }
 
+    /** Whether the bubble should start whenever the app is opened; cleared when the user closes it. */
+    var bubbleEnabled: Boolean
+        get() = prefs.getBoolean("bubbleEnabled", true)
+        set(value) = prefs.edit { putBoolean("bubbleEnabled", value) }
+
     /** Send every final transcript to [beamTargets] as soon as it arrives. Swiping a transcript beams it either way. */
     var autoBeam: Boolean
         get() = prefs.getBoolean("autoBeam", true)
