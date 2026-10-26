@@ -55,6 +55,15 @@ export class History {
       .all({ user, before: opts.before ?? Number.MAX_SAFE_INTEGER, limit: opts.limit ?? 50 });
   }
 
+  get(user: string, id: number): Transcript | null {
+    return this.db
+      .query<Transcript, any>(
+        `SELECT id, created_at AS createdAt, device, text, model, duration_ms AS durationMs, latency_ms AS latencyMs
+         FROM transcripts WHERE user = $user AND id = $id`,
+      )
+      .get({ user, id });
+  }
+
   delete(user: string, id: number): boolean {
     return this.db.query("DELETE FROM transcripts WHERE user = $user AND id = $id").run({ user, id }).changes > 0;
   }

@@ -19,6 +19,8 @@ If neither check passes, the gateway responds `401`.
 |---|---|---|
 | GET | `/healthz` | `{ok: true}`. No auth needed. |
 | GET | `/v1/me` | `{user, model}`. Use it for the app's "Test connection" button. |
+| GET | `/v1/desktops` | `{desktops: string[]}`: names of the caller's desktops that are online now, sorted. |
+| POST | `/v1/beam` with `{id, targets?: string[]}` | `{delivered: string[]}`. Sends history item `id` to the named desktops (every desktop when `targets` is omitted), with `fresh: true`. `404` if no such transcript exists, `400` for a bad body. |
 | GET | `/v1/history?before=<id>&limit=<n≤200, default 50>` | `{items: Transcript[]}`, newest first. Only the caller's own transcripts are returned. |
 | DELETE | `/v1/history/:id` | `204`, or `404` if no such transcript exists. |
 
@@ -47,7 +49,7 @@ A connection carries at most one utterance at a time:
 
 ### Client → server
 ```jsonc
-{"type": "start",  "utteranceId": "u1"}   // utteranceId: any string the client chooses
+{"type": "start",  "utteranceId": "u1", "targets": ["MacBook"]}   // utteranceId: any string the client chooses; targets: optional
 {"type": "stop",   "utteranceId": "u1"}   // end of speech → server produces the final transcript
 {"type": "cancel", "utteranceId": "u1"}   // drop it; no final is sent and nothing is saved
 ```
@@ -67,6 +69,8 @@ Notes:
   sends a `final` with `id: null` and `text: ""` and saves nothing.
 - **Length limit.** An utterance longer than `maxUtteranceSeconds` is stopped automatically. The server sends
   `error` with code `too_long`, then a `final` for the audio up to that point.
+- **Targets.** `targets` on `start` names the desktops that get the final. `[]` sends it nowhere. Omit it to send to
+  every desktop (older clients do this).
 - **Delivered.** `delivered` lists the names of the desktops the transcript was broadcast to (see below). It is empty
   when no desktop was connected or the final is empty.
 - **Errors.** `error` codes `busy` and `bad_request` describe a single bad message; the utterance, if any, keeps going.
@@ -86,7 +90,8 @@ The socket is receive-only; anything the desktop sends is ignored. The server pi
 {"type": "transcript", "id": 42, "text": "...", "device": "pixel", "createdAt": 1760500000000, "fresh": true} // on every non-empty final
 ```
 
-`fresh` is `true` only when the transcript is broadcast within 10 s of the phone's `stop`. Desktops in paste mode paste
-fresh transcripts and only copy the rest. Anything re-sent from history is never fresh.
+`fresh` is `true` when the transcript is broadcast within 10 s of the phone's `stop`, or when the user beams it with
+`POST /v1/beam`. In both cases the user is waiting for it. Desktops in paste mode paste fresh transcripts and only copy the
+rest.
 
 Delivery is live only: a desktop that is offline misses the transcript, which remains in history.
