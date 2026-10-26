@@ -32,9 +32,14 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -48,9 +53,12 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 
 private val Recording = Color(0xFFE11D48)
+private const val IDLE_ALPHA = 0.5f
+private const val IDLE_DELAY_MS = 2000L
 
 @Composable
 fun OverlayContent(
@@ -97,9 +105,21 @@ fun DismissTarget(state: StateFlow<UiState>) {
 private fun Bubble(s: UiState, onExpand: () -> Unit) {
     val recording = s.phase == Phase.Recording
     val pulse by animateFloatAsState(if (recording) 1f + s.level * 0.25f else 1f, label = "pulse")
+    // Fade the bubble out of the way once it has sat idle for a moment; any activity brings it back.
+    val active = s.phase != Phase.Idle || s.dragging
+    var dimmed by remember { mutableStateOf(false) }
+    LaunchedEffect(active) {
+        dimmed = false
+        if (!active) {
+            delay(IDLE_DELAY_MS)
+            dimmed = true
+        }
+    }
+    val alpha by animateFloatAsState(if (dimmed) IDLE_ALPHA else 1f, label = "alpha")
     Box(
         Modifier
             .size(PoodService.BUBBLE_DP.dp)
+            .alpha(alpha)
             .padding(4.dp)
             .scale(pulse)
             .background(if (recording) Recording else Magenta, CircleShape)
